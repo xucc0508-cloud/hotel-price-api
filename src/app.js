@@ -54,7 +54,10 @@ app.get('/hotels', (request, response) => {
     1,
     Math.min(100, Number(request.query.pageSize) || 20),
   );
-  const keyword = String(request.query.keyword || '').trim().toLowerCase();
+  const keyword = String(request.query.keyword || '')
+    .normalize('NFKC')
+    .trim()
+    .toLowerCase();
   const filtered = keyword
     ? hotels.filter((hotel) =>
         [
@@ -62,7 +65,9 @@ app.get('/hotels', (request, response) => {
           hotel.group,
           hotel.brand,
           hotel.city,
-        ].some((value) => value.toLowerCase().includes(keyword)),
+        ].some((value) =>
+          value.normalize('NFKC').toLowerCase().includes(keyword),
+        ),
       )
     : hotels;
   const start = (page - 1) * pageSize;

@@ -60,3 +60,23 @@ test('hotel list and detail match the miniapp contract', async () => {
     assert.notEqual(await response.json(), undefined, path);
   }
 });
+
+test('city search supports all required cities and Chinese fuzzy matching', async () => {
+  for (const city of ['北京', '上海', '广州', '深圳', '杭州', '成都']) {
+    const response = await fetch(
+      `${baseUrl}/hotels?keyword=${encodeURIComponent(city)}`,
+    );
+    const result = await response.json();
+    assert.equal(response.status, 200);
+    assert.ok(result.items.some((hotel) => hotel.city === city), city);
+  }
+
+  const fuzzyResponse = await fetch(
+    `${baseUrl}/hotels?keyword=${encodeURIComponent('深')}`,
+  );
+  const fuzzyResult = await fuzzyResponse.json();
+  assert.ok(
+    fuzzyResult.items.some((hotel) => hotel.city === '深圳'),
+    'Chinese partial city name',
+  );
+});

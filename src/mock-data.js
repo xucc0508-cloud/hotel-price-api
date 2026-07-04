@@ -6,7 +6,7 @@ const BRANDS = [
   '凯悦酒店',
   '雅高酒店',
 ];
-const CITIES = ['上海', '北京', '广州', '杭州', '成都'];
+const CITIES = ['北京', '上海', '广州', '深圳', '杭州', '成都'];
 
 function round(value) {
   return Number(value.toFixed(2));
@@ -26,14 +26,15 @@ function addDays(value, days) {
 
 const hotels = Array.from({ length: 20 }, (_, index) => {
   const groupIndex = index % GROUPS.length;
+  const cityIndex = index % CITIES.length;
   const number = String(index + 1).padStart(3, '0');
   return {
     id: `hotel-${number}`,
-    name: `${CITIES[groupIndex]}${BRANDS[groupIndex]} ${number}`,
+    name: `${CITIES[cityIndex]}${BRANDS[groupIndex]} ${number}`,
     group: GROUPS[groupIndex],
     brand: BRANDS[groupIndex],
-    city: CITIES[groupIndex],
-    address: `${CITIES[groupIndex]}市中心示例路 ${index + 1} 号`,
+    city: CITIES[cityIndex],
+    address: `${CITIES[cityIndex]}市中心示例路 ${index + 1} 号`,
     starRating: index % 3 === 0 ? 5 : 4,
     score: round(4.9 - (index % 5) * 0.1),
     imageUrl: '',
