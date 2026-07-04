@@ -3,7 +3,7 @@ require('dotenv').config({ quiet: true });
 const express = require('express');
 const app = express();
 const port = Number(process.env.PORT) || 3000;
-const host = process.env.HOST || '0.0.0.0';
+const host = '0.0.0.0';
 const shutdownTimeoutMs =
   Number(process.env.SHUTDOWN_TIMEOUT_MS) || 10_000;
 
@@ -31,7 +31,7 @@ app.use((_request, response) => {
 });
 
 const server = app.listen(port, host, () => {
-  console.log(`Hotel Price API listening on http://localhost:${port}`);
+  console.log(`Hotel Price API listening on http://${host}:${port}`);
 });
 
 function shutdown(signal) {

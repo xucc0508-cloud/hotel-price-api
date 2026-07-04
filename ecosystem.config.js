@@ -17,12 +17,10 @@ module.exports = {
       error_file: 'logs/error.log',
       env: {
         NODE_ENV: 'development',
-        HOST: '0.0.0.0',
         PORT: 3000,
       },
       env_production: {
         NODE_ENV: 'production',
-        HOST: '0.0.0.0',
         PORT: 3000,
       },
     },
