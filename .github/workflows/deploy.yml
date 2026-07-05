@@ -11,7 +11,7 @@ permissions:
 
 concurrency:
   group: hotel-price-api-production
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   deploy:
@@ -24,10 +24,74 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Deploy
+      - name: Runner diagnostics
+        timeout-minutes: 1
+        shell: bash
         run: |
+          set -Eeuo pipefail
+          echo "Expected labels: self-hosted, linux, x64, hotel-api"
+          echo "Runner name: ${RUNNER_NAME:-unknown}"
+          echo "Runner OS: ${RUNNER_OS:-unknown}"
+          echo "Runner architecture: ${RUNNER_ARCH:-unknown}"
+          echo "Workspace: ${GITHUB_WORKSPACE:-unknown}"
+          pwd
+          ls -la
+          whoami
+          uname -a
+          test "${RUNNER_OS}" = "Linux"
+          test "${RUNNER_ARCH}" = "X64"
+
+      - name: Checkout code
+        id: checkout
+        uses: actions/checkout@v4
+        continue-on-error: true
+        timeout-minutes: 2
+        with:
+          clean: true
+          fetch-depth: 1
+          lfs: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Checkout diagnostics
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          echo "Checkout outcome: ${{ steps.checkout.outcome }}"
+          pwd
+          ls -la
+          if [[ "${{ steps.checkout.outcome }}" = "success" ]]; then
+            git status --short --branch
+            git log -1 --oneline
+          else
+            echo "::warning::GitHub checkout failed or timed out; deployment will continue from /home/ubuntu/hotel-api."
+          fi
+
+      - name: Deploy production
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set -Eeuo pipefail
           cd /home/ubuntu/hotel-api
-          bash deploy.sh
+          pwd
+          ls -la
+          bash ./deploy.sh
+
+      - name: Verify production
+        timeout-minutes: 1
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          curl --fail --silent --show-error --max-time 5 \
+            http://127.0.0.1:3000/health
+          echo
+          pm2 describe hotel-price-api
+
+      - name: Failure diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          echo "Deployment failed on ${RUNNER_NAME:-unknown} (${RUNNER_OS:-unknown}/${RUNNER_ARCH:-unknown})."
+          echo "Required labels: self-hosted, linux, x64, hotel-api"
+          pm2 status || true
+          pm2 logs hotel-price-api --lines 80 --nostream || true

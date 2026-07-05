@@ -25,7 +25,7 @@ exec 9>"${LOCK_FILE}"
 flock -n 9 || fail "Another deployment is already running."
 
 log "Checking deployment prerequisites..."
-for command_name in git node pnpm pm2 curl; do
+for command_name in git node pnpm pm2 curl flock; do
   command -v "${command_name}" >/dev/null 2>&1 ||
     fail "${command_name} is not installed."
 done
@@ -52,17 +52,15 @@ pnpm install --frozen-lockfile
 
 log "Starting or reloading ${APP_NAME}..."
 mkdir -p logs
-if pm2 describe "${APP_NAME}" >/dev/null 2>&1; then
-  pm2 reload ecosystem.config.js --env production --update-env
-else
-  pm2 start ecosystem.config.js --env production
-fi
+pm2 startOrReload ecosystem.config.js --env production --update-env
+pm2 describe "${APP_NAME}" >/dev/null
 pm2 save
 
 log "Checking ${HEALTH_URL}..."
 for attempt in {1..15}; do
-  if curl --fail --silent --show-error --max-time 5 \
-    "${HEALTH_URL}" >/dev/null; then
+  if health_response="$(curl --fail --silent --show-error --max-time 5 \
+    "${HEALTH_URL}")"; then
+    printf '%s\n' "${health_response}"
     log "Deployment completed successfully."
     pm2 status "${APP_NAME}"
     exit 0
