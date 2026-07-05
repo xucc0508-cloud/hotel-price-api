@@ -90,10 +90,18 @@ function rankedHotel(hotel, date = dateString()) {
   const item = discoveryItem(hotel, date);
   return {
     ...hotel,
+    hotelId: item.hotelId,
+    hotelName: item.hotelName,
     lowestPrice: item.cashPrice,
+    cashPrice: item.cashPrice,
     pointsPrice: item.pointsPrice,
     valuePer10k: item.pointValue,
+    pointValue: item.pointValue,
     valueChangeRate: item.changeRate,
+    changeValue: item.changeValue,
+    changeRate: item.changeRate,
+    exchangeScore: item.exchangeScore,
+    recommendationText: item.recommendationText,
   };
 }
 

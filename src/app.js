@@ -9,7 +9,7 @@ const {
   priceFor,
   rankedHotel,
   round,
-} = require('./mock-data');
+} = require('./fallback-data');
 
 const app = express();
 
@@ -30,7 +30,10 @@ function resolveHotel(request, response) {
 }
 
 function discoveryRanking(request) {
-  return hotels.map((hotel) => discoveryItem(hotel, requestedDate(request)));
+  const city = String(request.query.city || '').trim();
+  return hotels
+    .filter((hotel) => !city || hotel.city === city)
+    .map((hotel) => discoveryItem(hotel, requestedDate(request)));
 }
 
 app.get('/', (_request, response) => {
@@ -58,8 +61,11 @@ app.get('/hotels', (request, response) => {
     .normalize('NFKC')
     .trim()
     .toLowerCase();
-  const filtered = keyword
-    ? hotels.filter((hotel) =>
+  const city = String(request.query.city || '').trim();
+  const filtered = hotels.filter(
+    (hotel) =>
+      (!city || hotel.city === city) &&
+      (!keyword ||
         [
           hotel.name,
           hotel.group,
@@ -67,9 +73,8 @@ app.get('/hotels', (request, response) => {
           hotel.city,
         ].some((value) =>
           value.normalize('NFKC').toLowerCase().includes(keyword),
-        ),
-      )
-    : hotels;
+        )),
+  );
   const start = (page - 1) * pageSize;
   response.status(200).json({
     items: filtered.slice(start, start + pageSize),
@@ -168,9 +173,10 @@ app.get('/hotel/:id/calendar', (request, response) => {
 app.get('/rank', (request, response) => {
   const metric = String(request.query.metric || 'pointsValue');
   const limit = Math.max(1, Math.min(100, Number(request.query.limit) || 20));
-  const ranked = hotels.map((hotel) =>
-    rankedHotel(hotel, requestedDate(request)),
-  );
+  const city = String(request.query.city || '').trim();
+  const ranked = hotels
+    .filter((hotel) => !city || hotel.city === city)
+    .map((hotel) => rankedHotel(hotel, requestedDate(request)));
   ranked.sort((left, right) =>
     metric === 'cashLowest'
       ? left.lowestPrice - right.lowestPrice

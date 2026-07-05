@@ -80,3 +80,22 @@ test('city search supports all required cities and Chinese fuzzy matching', asyn
     'Chinese partial city name',
   );
 });
+
+test('hotel and rank APIs filter by city', async () => {
+  const hotelResponse = await fetch(
+    `${baseUrl}/hotels?city=${encodeURIComponent('北京')}`,
+  );
+  const hotelResult = await hotelResponse.json();
+  assert.equal(hotelResponse.status, 200);
+  assert.ok(hotelResult.items.length > 0);
+  assert.ok(hotelResult.items.every((hotel) => hotel.city === '北京'));
+
+  const rankResponse = await fetch(
+    `${baseUrl}/rank?city=${encodeURIComponent('北京')}`,
+  );
+  const rankResult = await rankResponse.json();
+  assert.equal(rankResponse.status, 200);
+  assert.ok(rankResult.length > 0);
+  assert.ok(rankResult.every((hotel) => hotel.city === '北京'));
+  assert.ok(rankResult.every((hotel) => hotel.hotelId && hotel.pointValue));
+});
