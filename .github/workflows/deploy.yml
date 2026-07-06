@@ -11,7 +11,7 @@ permissions:
 
 concurrency:
   group: hotel-price-api-production
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   deploy:
@@ -41,32 +41,6 @@ jobs:
           test "${RUNNER_OS}" = "Linux"
           test "${RUNNER_ARCH}" = "X64"
 
-      - name: Checkout code
-        id: checkout
-        uses: actions/checkout@v4
-        continue-on-error: true
-        timeout-minutes: 2
-        with:
-          clean: true
-          fetch-depth: 1
-          lfs: false
-          persist-credentials: false
-          submodules: false
-
-      - name: Checkout diagnostics
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          echo "Checkout outcome: ${{ steps.checkout.outcome }}"
-          pwd
-          ls -la
-          if [[ "${{ steps.checkout.outcome }}" = "success" ]]; then
-            git status --short --branch
-            git log -1 --oneline
-          else
-            echo "::warning::GitHub checkout failed or timed out; deployment will continue from /home/ubuntu/hotel-api."
-          fi
-
       - name: Deploy production
         timeout-minutes: 10
         shell: bash
@@ -75,6 +49,8 @@ jobs:
           cd /home/ubuntu/hotel-api
           pwd
           ls -la
+          git remote -v
+          git status --short --branch
           bash ./deploy.sh
 
       - name: Verify production
