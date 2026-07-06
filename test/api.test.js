@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const { after, before, test } = require('node:test');
 const app = require('../src/app');
 
@@ -98,4 +99,48 @@ test('hotel and rank APIs filter by city', async () => {
   assert.ok(rankResult.length > 0);
   assert.ok(rankResult.every((hotel) => hotel.city === '北京'));
   assert.ok(rankResult.every((hotel) => hotel.hotelId && hotel.pointValue));
+});
+
+test('admin browser pages and protected JSON APIs are available', async () => {
+  const loginPageResponse = await fetch(`${baseUrl}/admin/login`, {
+    headers: { Accept: 'text/html' },
+  });
+  assert.equal(loginPageResponse.status, 200);
+  assert.match(await loginPageResponse.text(), /管理员登录/);
+
+  const protectedResponse = await fetch(`${baseUrl}/admin/providers`);
+  assert.equal(protectedResponse.status, 401);
+  const protectedJson = await protectedResponse.json();
+  assert.equal(protectedJson.error.code, 'UNAUTHORIZED');
+});
+
+test('admin login uses configured password hash and token unlocks providers', async () => {
+  process.env.ADMIN_USERNAME = 'admin-test';
+  process.env.ADMIN_PASSWORD_HASH = `sha256:${crypto
+    .createHash('sha256')
+    .update('secret-test-password')
+    .digest('hex')}`;
+  process.env.ADMIN_JWT_SECRET = 'test_jwt_secret_minimum_32_characters_long';
+
+  const loginResponse = await fetch(`${baseUrl}/admin/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      username: 'admin-test',
+      password: 'secret-test-password',
+    }),
+  });
+  assert.equal(loginResponse.status, 200);
+  const loginJson = await loginResponse.json();
+  assert.ok(loginJson.data.accessToken);
+
+  const providersResponse = await fetch(`${baseUrl}/admin/providers`, {
+    headers: { Authorization: `Bearer ${loginJson.data.accessToken}` },
+  });
+  assert.equal(providersResponse.status, 200);
+  const providersJson = await providersResponse.json();
+  assert.deepEqual(
+    providersJson.data.map((item) => item.provider),
+    ['IHG', 'Marriott', 'Hilton', 'Hyatt', 'Accor'],
+  );
 });

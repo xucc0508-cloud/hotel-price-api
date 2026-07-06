@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const { maybeSendAdminPage, sendAdminPage } = require('./admin-ui');
 
 const PROVIDERS = ['IHG', 'Marriott', 'Hilton', 'Hyatt', 'Accor'];
 const DATA_DIR = path.join(__dirname, '..', 'data');
@@ -82,6 +83,33 @@ function encryptCredential(value) {
   ).toString('base64url');
 }
 
+function hashPassword(password) {
+  return crypto.createHash('sha256').update(String(password)).digest('hex');
+}
+
+function verifyPassword(password, passwordHash) {
+  if (!passwordHash) return false;
+  const expected = String(passwordHash).trim();
+  let actual;
+  if (expected.startsWith('sha256:')) {
+    actual = `sha256:${hashPassword(password)}`;
+  } else if (/^[a-f0-9]{64}$/i.test(expected)) {
+    actual = hashPassword(password);
+  } else {
+    return false;
+  }
+  if (actual.length !== expected.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(actual), Buffer.from(expected));
+}
+
+function adminAuthConfigured() {
+  return Boolean(
+    process.env.ADMIN_USERNAME &&
+      process.env.ADMIN_PASSWORD_HASH &&
+      process.env.ADMIN_JWT_SECRET,
+  );
+}
+
 function signToken(username) {
   const now = Math.floor(Date.now() / 1000);
   const payload = {
@@ -147,14 +175,16 @@ function requireAdmin(request, response, next) {
 function login(request, response) {
   const { username, password } = request.body || {};
   const expectedUser = process.env.ADMIN_USERNAME;
-  const expectedPassword = process.env.ADMIN_PASSWORD;
+  const expectedPasswordHash = process.env.ADMIN_PASSWORD_HASH;
 
-  if (
-    !expectedUser ||
-    !expectedPassword ||
-    username !== expectedUser ||
-    password !== expectedPassword
-  ) {
+  if (!adminAuthConfigured()) {
+    response
+      .status(503)
+      .json(errorResponse('ADMIN_NOT_CONFIGURED', '管理员账号未配置'));
+    return;
+  }
+
+  if (username !== expectedUser || !verifyPassword(password, expectedPasswordHash)) {
     response
       .status(401)
       .json(errorResponse('INVALID_CREDENTIALS', 'Invalid credentials'));
@@ -303,9 +333,11 @@ function syncAll(_request, response) {
 }
 
 function registerAdminRoutes(app) {
+  app.get('/admin', sendAdminPage);
+  app.get('/admin/login', sendAdminPage);
   app.post('/admin/login', login);
 
-  app.get('/admin/dashboard', requireAdmin, (_request, response) => {
+  app.get('/admin/dashboard', maybeSendAdminPage, requireAdmin, (_request, response) => {
     const store = readStore();
     response.status(200).json(
       jsonResponse({
@@ -325,7 +357,7 @@ function registerAdminRoutes(app) {
     );
   });
 
-  app.get('/admin/providers', requireAdmin, (_request, response) => {
+  app.get('/admin/providers', maybeSendAdminPage, requireAdmin, (_request, response) => {
     response.status(200).json(jsonResponse(providersStatus()));
   });
 
@@ -369,6 +401,9 @@ function registerAdminRoutes(app) {
   });
 
   app.post('/admin/sync/all', requireAdmin, syncAll);
+
+  app.get('/admin/sync-jobs', sendAdminPage);
+  app.get('/admin/sync-logs', sendAdminPage);
 
   app.get('/admin/sync/jobs', requireAdmin, (_request, response) => {
     response.status(200).json(jsonResponse(readStore().syncJobs.slice(0, 50)));

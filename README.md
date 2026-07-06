@@ -67,6 +67,16 @@ command.
 
 Protected admin APIs are mounted under `/admin`.
 
+Browser pages:
+
+```text
+GET /admin/login
+GET /admin/dashboard
+GET /admin/providers
+GET /admin/sync-jobs
+GET /admin/sync-logs
+```
+
 ```text
 POST /admin/login
 GET  /admin/dashboard
@@ -87,6 +97,21 @@ Supported provider keys:
 - `Hilton`
 - `Hyatt`
 - `Accor`
+
+Required production environment variables:
+
+```bash
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD_HASH=sha256:<sha256-hex-of-password>
+ADMIN_JWT_SECRET=<random-32-plus-character-secret>
+CREDENTIAL_ENCRYPTION_KEY=<random-32-plus-character-secret>
+```
+
+Generate an example SHA-256 password hash on the server:
+
+```bash
+node -e "const crypto=require('crypto'); console.log('sha256:'+crypto.createHash('sha256').update(process.argv[1]).digest('hex'))" 'your-password'
+```
 
 Credentials are never logged and are encrypted with AES-256-GCM before being
 stored in the local runtime data store. This framework does not bypass CAPTCHA,
