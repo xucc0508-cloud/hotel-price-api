@@ -6,6 +6,7 @@ dist/
 !.env.example
 *.log
 logs/
+data/
 coverage/
 .DS_Store
 Thumbs.db

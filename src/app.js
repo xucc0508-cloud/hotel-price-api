@@ -10,11 +10,13 @@ const {
   rankedHotel,
   round,
 } = require('./fallback-data');
+const { registerAdminRoutes } = require('./admin-sync');
 
 const app = express();
 
 app.disable('x-powered-by');
 app.use(express.json());
+registerAdminRoutes(app);
 
 function requestedDate(request) {
   return request.query.date || request.query.checkinDate || dateString();
