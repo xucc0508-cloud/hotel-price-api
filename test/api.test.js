@@ -162,3 +162,73 @@ test('admin login uses configured password hash and token unlocks providers', as
     ['IHG', 'Marriott', 'Hilton', 'Hyatt', 'Accor'],
   );
 });
+
+test('admin can mark a provider as manually authorized without faking official connectivity', async () => {
+  process.env.ADMIN_USERNAME = 'manual-admin';
+  process.env.ADMIN_PASSWORD_HASH = `sha256:${crypto
+    .createHash('sha256')
+    .update('manual-secret-password')
+    .digest('hex')}`;
+  process.env.ADMIN_JWT_SECRET = 'manual_test_jwt_secret_minimum_32_chars';
+
+  const loginResponse = await fetch(`${baseUrl}/admin/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      username: 'manual-admin',
+      password: 'manual-secret-password',
+    }),
+  });
+  const loginJson = await loginResponse.json();
+  const auth = { Authorization: `Bearer ${loginJson.data.token}` };
+
+  const saveResponse = await fetch(`${baseUrl}/admin/providers/IHG/login`, {
+    method: 'POST',
+    headers: { ...auth, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: '32000000', password: 'provider-secret' }),
+  });
+  assert.equal(saveResponse.status, 200);
+
+  const authorizeResponse = await fetch(
+    `${baseUrl}/admin/providers/IHG/manual-authorize`,
+    {
+      method: 'POST',
+      headers: { ...auth, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ note: 'Admin confirmed account ownership.' }),
+    },
+  );
+  assert.equal(authorizeResponse.status, 200);
+  const authorizeJson = await authorizeResponse.json();
+  assert.equal(authorizeJson.success, true);
+  assert.equal(authorizeJson.data.status, 'manual_authorized');
+  assert.equal(authorizeJson.data.sourceType, 'manual');
+
+  const providersResponse = await fetch(`${baseUrl}/admin/providers`, {
+    headers: auth,
+  });
+  const providersJson = await providersResponse.json();
+  const ihg = providersJson.data.find((item) => item.provider === 'IHG');
+  assert.equal(ihg.connectionStatus, 'manual_authorized');
+  assert.equal(ihg.sourceType, 'manual');
+  assert.ok(ihg.manualAuthorizedAt);
+
+  const testResponse = await fetch(`${baseUrl}/admin/providers/IHG/test`, {
+    method: 'POST',
+    headers: { ...auth, 'Content-Type': 'application/json' },
+    body: '{}',
+  });
+  const testJson = await testResponse.json();
+  assert.equal(testResponse.status, 200);
+  assert.equal(testJson.data.status, 'manual_authorized');
+  assert.match(testJson.data.message, /无法自动测试官方连接/);
+
+  const syncResponse = await fetch(`${baseUrl}/admin/providers/IHG/sync`, {
+    method: 'POST',
+    headers: { ...auth, 'Content-Type': 'application/json' },
+    body: '{}',
+  });
+  const syncJson = await syncResponse.json();
+  assert.equal(syncResponse.status, 200);
+  assert.equal(syncJson.data.status, 'failed');
+  assert.match(syncJson.data.errorMessage, /请导入价格文件或接入官方 API/);
+});

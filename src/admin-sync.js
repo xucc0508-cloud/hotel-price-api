@@ -232,6 +232,8 @@ function providersStatus() {
       syncedHotelCount,
       syncedPriceCount,
       recentError: account?.lastError || null,
+      manualAuthorizedAt: account?.manualAuthorizedAt || null,
+      sourceType: account?.sourceType || null,
       message: account
         ? '待人工授权：未接入官方 API/OAuth，不会绕过验证码、MFA 或风控。'
         : '未登录，暂无真实价格数据。',
@@ -282,6 +284,63 @@ function saveProviderLogin(request, response) {
   );
 }
 
+function manualAuthorizeProvider(request, response) {
+  const provider = request.params.provider;
+  if (!PROVIDERS.includes(provider)) {
+    response
+      .status(400)
+      .json(errorResponse('UNSUPPORTED_PROVIDER', 'Unsupported provider'));
+    return;
+  }
+
+  const store = readStore();
+  const account = store.accounts[provider];
+  if (!account) {
+    response
+      .status(400)
+      .json(
+        errorResponse(
+          'PROVIDER_ACCOUNT_REQUIRED',
+          'Provider account must be saved before manual authorization',
+        ),
+      );
+    return;
+  }
+
+  const authorizedAt = nowIso();
+  const note = String(request.body?.note || '').slice(0, 500);
+  store.accounts[provider] = {
+    ...account,
+    status: 'manual_authorized',
+    sourceType: 'manual',
+    manualAuthorizedAt: authorizedAt,
+    manualAuthorizationNote: note,
+    lastError:
+      '已人工授权：当前为人工确认模式，未接入官方 API/OAuth，不能自动测试官方连接。',
+    updatedAt: authorizedAt,
+  };
+  store.syncLogs.push({
+    id: stableId('log'),
+    jobId: null,
+    provider,
+    level: 'info',
+    message: '管理员已人工授权该集团账号；真实价格同步仍需官方 API/OAuth 或手工导入。',
+    createdAt: authorizedAt,
+  });
+  writeStore(store);
+
+  response.status(200).json(
+    jsonResponse({
+      provider,
+      usernameMasked: store.accounts[provider].usernameMasked,
+      status: store.accounts[provider].status,
+      sourceType: store.accounts[provider].sourceType,
+      manualAuthorizedAt: authorizedAt,
+      message: store.accounts[provider].lastError,
+    }),
+  );
+}
+
 function createSyncJob(provider, type) {
   const store = readStore();
   const account = provider ? store.accounts[provider] : null;
@@ -323,10 +382,16 @@ function syncProvider(request, response) {
   }
   const store = readStore();
   const job = createSyncJob(provider, 'manual');
+  if (store.accounts[provider]?.status === 'manual_authorized') {
+    job.errorMessage =
+      '已人工授权：请导入价格文件或接入官方 API/OAuth 后再同步真实价格。';
+  }
   store.syncJobs.unshift(job);
   appendLog(store, job, 'warn', job.errorMessage);
   if (store.accounts[provider]) {
-    store.accounts[provider].status = 'expired';
+    if (store.accounts[provider].status !== 'manual_authorized') {
+      store.accounts[provider].status = 'expired';
+    }
     store.accounts[provider].lastError = job.errorMessage;
     store.accounts[provider].updatedAt = nowIso();
   }
@@ -376,12 +441,31 @@ function registerAdminRoutes(app) {
 
   app.post('/admin/providers/:provider/login', requireAdmin, saveProviderLogin);
 
+  app.post(
+    '/admin/providers/:provider/manual-authorize',
+    requireAdmin,
+    manualAuthorizeProvider,
+  );
+
   app.post('/admin/providers/:provider/test', requireAdmin, (request, response) => {
     const provider = request.params.provider;
     if (!PROVIDERS.includes(provider)) {
       response
         .status(400)
         .json(errorResponse('UNSUPPORTED_PROVIDER', 'Unsupported provider'));
+      return;
+    }
+    const account = readStore().accounts[provider];
+    if (account?.status === 'manual_authorized') {
+      response.status(200).json(
+        jsonResponse({
+          provider,
+          success: false,
+          status: 'manual_authorized',
+          message:
+            '已人工授权：当前为人工确认模式，无法自动测试官方连接；请导入价格文件或接入官方 API/OAuth。',
+        }),
+      );
       return;
     }
     response.status(200).json(

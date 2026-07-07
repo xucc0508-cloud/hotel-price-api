@@ -173,7 +173,7 @@ function adminPageHtml() {
       return String(value ?? "").replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
     }
     function statusBadge(status) {
-      const cls = status === "active" || status === "success" || status === "info"
+      const cls = status === "active" || status === "success" || status === "info" || status === "manual_authorized"
         ? "ok"
         : status === "error" || status === "expired" || status === "failed"
           ? "error"
@@ -340,6 +340,20 @@ function adminPageHtml() {
         '<button class="secondary" onclick="syncProvider(\\'' + item.provider + '\\')">立即同步</button>' +
         '<a class="badge" href="/admin/sync-logs">查看日志</a></div></div>';
     }
+    function providerCard(item) {
+      const recentErrorClass = item.connectionStatus === "manual_authorized" ? "success-text" : "error-text";
+      return '<div class="card"><div class="row" style="justify-content:space-between"><h2>' + escapeHtml(item.provider) + '</h2>' + statusBadge(item.connectionStatus) + '</div>' +
+        '<p class="muted">账号：' + escapeHtml(item.usernameMasked || "未录入") + '</p>' +
+        '<p>最近同步：' + escapeHtml(item.lastSyncAt || "暂无") + '</p>' +
+        '<p>酒店：' + item.syncedHotelCount + ' / 价格：' + item.syncedPriceCount + '</p>' +
+        '<p class="' + recentErrorClass + '">' + escapeHtml(item.recentError || "") + '</p>' +
+        '<div class="row"><button onclick="openProviderLogin(\\'' + item.provider + '\\')">登录账号</button>' +
+        '<button class="secondary" onclick="manualAuthorizeProvider(\\'' + item.provider + '\\')">人工授权</button>' +
+        '<button class="secondary" onclick="testProvider(\\'' + item.provider + '\\')">测试连接</button>' +
+        '<button class="secondary" onclick="syncProvider(\\'' + item.provider + '\\')">立即同步</button>' +
+        '<a class="badge" href="/admin/sync-logs">查看日志</a></div></div>';
+    }
+
     async function renderProviders() {
       const data = await adminFetch("/admin/providers");
       const normalized = providers.map(name => data.find(item => item.provider === name) || { provider: name, connectionStatus: "expired", syncedHotelCount: 0, syncedPriceCount: 0 });
@@ -384,6 +398,21 @@ function adminPageHtml() {
         alert(result.message || "测试完成");
       } catch (error) { alert(String(error.code ? error.code + ": " + error.message : error.message || error)); }
     }
+    async function manualAuthorizeProvider(provider) {
+      const ok = confirm(provider + " 将被标记为人工授权。\\n\\n这只表示管理员已确认账号由本人录入；不会伪造官方 API/OAuth，也不会绕过验证码/MFA。\\n\\n继续吗？");
+      if (!ok) return;
+      try {
+        const result = await adminFetch("/admin/providers/" + provider + "/manual-authorize", {
+          method: "POST",
+          body: JSON.stringify({ note: "Confirmed from admin console." }),
+        });
+        alert(result.message || "已人工授权");
+        await renderProviders();
+      } catch (error) {
+        alert(String(error.code ? error.code + ": " + error.message : error.message || error));
+      }
+    }
+
     async function syncProvider(provider) {
       try {
         const result = await adminFetch("/admin/providers/" + provider + "/sync", { method: "POST", body: "{}" });
