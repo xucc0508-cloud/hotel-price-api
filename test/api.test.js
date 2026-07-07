@@ -545,6 +545,56 @@ test('IHG Playwright session sync writes 90 days of real source prices', async (
   assert.equal(priceJson.sourceType, 'session');
 });
 
+test('IHG Playwright sync preserves live scraper failure reason', async () => {
+  process.env.ADMIN_USERNAME = 'ihg-live-error-admin';
+  process.env.ADMIN_PASSWORD_HASH = `sha256:${crypto
+    .createHash('sha256')
+    .update('ihg-live-error-password')
+    .digest('hex')}`;
+  process.env.ADMIN_JWT_SECRET = 'ihg_live_error_jwt_secret_minimum_32_chars';
+  process.env.CREDENTIAL_ENCRYPTION_KEY =
+    'ihg_live_error_encryption_key_minimum_32_chars';
+  delete process.env.IHG_SYNC_SOURCE_FILE;
+  delete process.env.IHG_SYNC_SOURCE_URL;
+  process.env.IHG_DISABLE_LIVE_SCRAPER = '1';
+
+  const loginResponse = await fetch(`${baseUrl}/admin/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      username: 'ihg-live-error-admin',
+      password: 'ihg-live-error-password',
+    }),
+  });
+  const loginJson = await loginResponse.json();
+  const auth = { Authorization: `Bearer ${loginJson.data.token}` };
+
+  await fetch(`${baseUrl}/admin/providers/IHG/playwright/session`, {
+    method: 'POST',
+    headers: { ...auth, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      days: 90,
+      storageState: {
+        cookies: [{ name: 'sid', value: 'secret', domain: '.ihg.com' }],
+        origins: [],
+      },
+    }),
+  });
+
+  const syncResponse = await fetch(`${baseUrl}/admin/providers/IHG/sync`, {
+    method: 'POST',
+    headers: { ...auth, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ days: 1 }),
+  });
+  const syncJson = await syncResponse.json();
+  assert.equal(syncResponse.status, 200);
+  assert.equal(syncJson.data.status, 'failed');
+  assert.match(syncJson.data.errorMessage, /IHG_LIVE_SCRAPER_DISABLED/);
+  assert.doesNotMatch(syncJson.data.errorMessage, /source is not configured/);
+
+  delete process.env.IHG_DISABLE_LIVE_SCRAPER;
+});
+
 test('IHG parser extracts real visible hotel names, cash prices and points prices', () => {
   const cashCard = parseHotelCard(
     {

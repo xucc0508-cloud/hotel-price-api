@@ -628,11 +628,16 @@ async function syncProviderWithPlaywright(request, response) {
   const requestedDays = normalizeSyncDays(request.body?.days || account?.syncWindowDays);
   const job = createSyncJob(provider, 'manual');
   job.requestedDays = requestedDays;
+  let attemptedLiveSync = false;
 
-  if (
+  const canAttemptIhgLiveSync =
     provider === 'IHG' &&
-    ['manual_authorized', 'session_authorized', 'active'].includes(account?.status)
-  ) {
+    account &&
+    (['session_authorized', 'active'].includes(account.status) ||
+      Boolean(process.env.IHG_SYNC_SOURCE_URL || process.env.IHG_SYNC_SOURCE_FILE));
+
+  if (canAttemptIhgLiveSync) {
+    attemptedLiveSync = true;
     try {
       const ihgData = await fetchIhgAuthorizedData(account, {
         days: requestedDays,
@@ -669,17 +674,18 @@ async function syncProviderWithPlaywright(request, response) {
       response.status(200).json(jsonResponse(job));
       return;
     } catch (error) {
+      const errorCode = error.code || 'UNKNOWN';
       job.errorMessage =
         error.code === 'IHG_REAL_SOURCE_NOT_CONFIGURED'
           ? 'IHG sync source is not configured and live Playwright scraping is unavailable. Saved sessions are kept encrypted, and no fake price data was written.'
-          : `IHG real sync failed: ${error.message || error}`;
+          : `IHG real sync failed (${errorCode}): ${error.message || error}`;
     }
   }
 
-  if (account?.status === 'session_authorized') {
+  if (!attemptedLiveSync && account?.status === 'session_authorized') {
     job.errorMessage =
       'IHG Playwright session is saved, but the live price scraper/source is not configured. No fake price data was written.';
-  } else if (account?.status === 'manual_authorized') {
+  } else if (!attemptedLiveSync && account?.status === 'manual_authorized') {
     job.errorMessage =
       'Manual authorization is recorded. 请导入价格文件或接入官方 API before syncing real prices.';
   }

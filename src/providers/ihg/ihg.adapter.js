@@ -52,6 +52,12 @@ function createIhgAdapter({ decryptCredential }) {
       if (hasConfiguredSource()) {
         return fetchIhgRealData(options);
       }
+      if (process.env.IHG_DISABLE_LIVE_SCRAPER === '1') {
+        throw Object.assign(
+          new Error('IHG live Playwright scraper is disabled by configuration.'),
+          { code: 'IHG_LIVE_SCRAPER_DISABLED' },
+        );
+      }
       const storageState = requireAuthorizedStorageState(account, decryptCredential);
       return scrapeIhgAvailability({
         storageState,
