@@ -337,7 +337,7 @@ function adminPageHtml() {
         '<p class="error-text">' + escapeHtml(item.recentError || "") + '</p>' +
         '<div class="row"><button onclick="openProviderLogin(\\'' + item.provider + '\\')">登录账号</button>' +
         '<button class="secondary" onclick="testProvider(\\'' + item.provider + '\\')">测试连接</button>' +
-        '<button class="secondary" onclick="syncProvider(\\'' + item.provider + '\\')">立即同步</button>' +
+        '<button class="secondary" onclick="syncProvider(\\'' + item.provider + '\\')">同步真实价格</button>' +
         '<a class="badge" href="/admin/sync-logs">查看日志</a></div></div>';
     }
     function providerCard(item) {

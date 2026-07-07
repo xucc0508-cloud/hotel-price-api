@@ -10,7 +10,7 @@ const {
   rankedHotel,
   round,
 } = require('./fallback-data');
-const { registerAdminRoutes } = require('./admin-sync');
+const { readStore, registerAdminRoutes } = require('./admin-sync');
 
 const app = express();
 
@@ -23,7 +23,7 @@ function requestedDate(request) {
 }
 
 function resolveHotel(request, response) {
-  const hotel = findHotel(request.params.id);
+  const hotel = findPublicHotel(request.params.id);
   if (!hotel) {
     response.status(404).json({ error: 'Hotel not found' });
     return null;
@@ -31,11 +31,97 @@ function resolveHotel(request, response) {
   return hotel;
 }
 
+function syncedHotels() {
+  const store = readStore();
+  return store.hotelSources.map((hotel) => ({
+    id: `${hotel.provider}:${hotel.providerHotelId}`,
+    providerHotelId: hotel.providerHotelId,
+    name: hotel.hotelName,
+    group: hotel.provider,
+    provider: hotel.provider,
+    brand: hotel.brand,
+    city: hotel.city,
+    address: hotel.address,
+    country: hotel.country,
+    sourceType: 'synced',
+    lastSeenAt: hotel.lastSeenAt,
+  }));
+}
+
+function publicHotels() {
+  return [...syncedHotels(), ...hotels];
+}
+
+function findPublicHotel(id) {
+  return (
+    syncedHotels().find(
+      (hotel) => hotel.id === id || hotel.providerHotelId === id,
+    ) || findHotel(id)
+  );
+}
+
+function syncedPriceFor(hotel, date) {
+  if (!hotel?.provider || !hotel?.providerHotelId) return null;
+  const store = readStore();
+  const snapshots = store.priceSnapshots
+    .filter(
+      (price) =>
+        price.provider === hotel.provider &&
+        price.providerHotelId === hotel.providerHotelId,
+    )
+    .sort((left, right) => String(right.fetchedAt).localeCompare(String(left.fetchedAt)));
+  const exact = snapshots.find((price) => price.checkinDate === date);
+  const price = exact || snapshots[0];
+  if (!price) return null;
+  const pointValue =
+    price.pointsPrice > 0 ? round((price.cashPrice / price.pointsPrice) * 10000) : 0;
+  return {
+    hotelId: hotel.id,
+    providerHotelId: hotel.providerHotelId,
+    date: price.checkinDate || date,
+    checkoutDate: price.checkoutDate,
+    cashPrice: price.cashPrice,
+    pointsPrice: price.pointsPrice,
+    pointValue,
+    valuePer10k: pointValue,
+    currency: price.currency,
+    availability: price.availability,
+    sourceType: price.sourceType,
+    fetchedAt: price.fetchedAt,
+    source: 'price_snapshots',
+  };
+}
+
+function publicPriceFor(hotel, date) {
+  return syncedPriceFor(hotel, date) || priceFor(hotel, date);
+}
+
 function discoveryRanking(request) {
   const city = String(request.query.city || '').trim();
-  return hotels
-    .filter((hotel) => !city || hotel.city === city)
-    .map((hotel) => discoveryItem(hotel, requestedDate(request)));
+  const provider = String(request.query.provider || request.query.group || '').trim();
+  return publicHotels()
+    .filter((hotel) => (!city || hotel.city === city) && (!provider || hotel.provider === provider || hotel.group === provider))
+    .map((hotel) => {
+      if (hotel.sourceType === 'synced') {
+        const price = publicPriceFor(hotel, requestedDate(request));
+        return {
+          hotelId: hotel.id,
+          hotelName: hotel.name,
+          group: hotel.group,
+          brand: hotel.brand,
+          city: hotel.city,
+          cashPrice: price.cashPrice,
+          pointsPrice: price.pointsPrice,
+          pointValue: price.pointValue,
+          exchangeScore: Math.max(0, Math.min(100, round(price.pointValue / 5))),
+          recommendationText: '真实同步价格，请以酒店官方最终预订页为准。',
+          changeValue: 0,
+          changeRate: 0,
+          sourceType: price.sourceType,
+        };
+      }
+      return discoveryItem(hotel, requestedDate(request));
+    });
 }
 
 app.get('/', (_request, response) => {
@@ -64,9 +150,11 @@ app.get('/hotels', (request, response) => {
     .trim()
     .toLowerCase();
   const city = String(request.query.city || '').trim();
-  const filtered = hotels.filter(
+  const provider = String(request.query.provider || request.query.group || '').trim();
+  const filtered = publicHotels().filter(
     (hotel) =>
       (!city || hotel.city === city) &&
+      (!provider || hotel.provider === provider || hotel.group === provider) &&
       (!keyword ||
         [
           hotel.name,
@@ -112,8 +200,8 @@ app.get('/hotels/:id', sendHotelDetail);
 app.get('/hotel/:id', sendHotelDetail);
 
 app.get('/price', (request, response) => {
-  const hotel = findHotel(String(request.query.hotelId || '')) || hotels[0];
-  response.status(200).json(priceFor(hotel, requestedDate(request)));
+  const hotel = findPublicHotel(String(request.query.hotelId || '')) || publicHotels()[0];
+  response.status(200).json(publicPriceFor(hotel, requestedDate(request)));
 });
 
 app.get('/hotel/:id/analysis', (request, response) => {
@@ -176,9 +264,28 @@ app.get('/rank', (request, response) => {
   const metric = String(request.query.metric || 'pointsValue');
   const limit = Math.max(1, Math.min(100, Number(request.query.limit) || 20));
   const city = String(request.query.city || '').trim();
-  const ranked = hotels
-    .filter((hotel) => !city || hotel.city === city)
-    .map((hotel) => rankedHotel(hotel, requestedDate(request)));
+  const provider = String(request.query.provider || request.query.group || '').trim();
+  const ranked = publicHotels()
+    .filter((hotel) => (!city || hotel.city === city) && (!provider || hotel.provider === provider || hotel.group === provider))
+    .map((hotel) => {
+      if (hotel.sourceType === 'synced') {
+        const price = publicPriceFor(hotel, requestedDate(request));
+        return {
+          hotelId: hotel.id,
+          hotelName: hotel.name,
+          group: hotel.group,
+          brand: hotel.brand,
+          city: hotel.city,
+          lowestPrice: price.cashPrice,
+          valuePer10k: price.pointValue,
+          cashPrice: price.cashPrice,
+          pointsPrice: price.pointsPrice,
+          pointValue: price.pointValue,
+          sourceType: price.sourceType,
+        };
+      }
+      return rankedHotel(hotel, requestedDate(request));
+    });
   ranked.sort((left, right) =>
     metric === 'cashLowest'
       ? left.lowestPrice - right.lowestPrice
@@ -228,12 +335,18 @@ app.get('/compare/rank', (request, response) => {
   const hotelIds = String(request.query.hotelIds || '')
     .split(',')
     .filter(Boolean);
+  const provider = String(request.query.provider || request.query.group || '').trim();
+  const city = String(request.query.city || '').trim();
   const selected = hotelIds.length
-    ? hotels.filter((hotel) => hotelIds.includes(hotel.id))
-    : hotels;
+    ? publicHotels().filter((hotel) => hotelIds.includes(hotel.id))
+    : publicHotels().filter(
+        (hotel) =>
+          (!provider || hotel.provider === provider || hotel.group === provider) &&
+          (!city || hotel.city === city),
+      );
   const ranked = selected
     .map((hotel) => {
-      const price = priceFor(hotel, requestedDate(request));
+      const price = publicPriceFor(hotel, requestedDate(request));
       return {
         hotelId: hotel.id,
         group: hotel.group,

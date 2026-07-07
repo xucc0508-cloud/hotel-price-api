@@ -240,3 +240,115 @@ test('admin can mark a provider as manually authorized without faking official c
   assert.equal(syncJson.data.status, 'failed');
   assert.match(syncJson.data.errorMessage, /请导入价格文件或接入官方 API/);
 });
+
+test('IHG real sync source updates public hotel and price APIs', async () => {
+  process.env.ADMIN_USERNAME = 'ihg-sync-admin';
+  process.env.ADMIN_PASSWORD_HASH = `sha256:${crypto
+    .createHash('sha256')
+    .update('ihg-sync-password')
+    .digest('hex')}`;
+  process.env.ADMIN_JWT_SECRET = 'ihg_sync_jwt_secret_minimum_32_chars';
+
+  const ihgSourceFile = path.join(
+    os.tmpdir(),
+    `hotel-price-api-ihg-source-${process.pid}.json`,
+  );
+  process.env.IHG_SYNC_SOURCE_FILE = ihgSourceFile;
+  require('node:fs').writeFileSync(
+    ihgSourceFile,
+    JSON.stringify({
+      hotels: [
+        {
+          providerHotelId: 'PEKHB',
+          hotelName: 'IHG 北京真实测试酒店',
+          brand: 'Holiday Inn Express',
+          city: '北京',
+          address: '北京市测试路 1 号',
+          country: 'CN',
+        },
+      ],
+      prices: [
+        {
+          providerHotelId: 'PEKHB',
+          hotelName: 'IHG 北京真实测试酒店',
+          city: '北京',
+          checkinDate: '2026-07-08',
+          checkoutDate: '2026-07-09',
+          cashPrice: 688,
+          pointsPrice: 20000,
+          currency: 'CNY',
+          availability: 'available',
+          sourceType: 'official',
+        },
+      ],
+    }),
+  );
+
+  const loginResponse = await fetch(`${baseUrl}/admin/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      username: 'ihg-sync-admin',
+      password: 'ihg-sync-password',
+    }),
+  });
+  const loginJson = await loginResponse.json();
+  const auth = { Authorization: `Bearer ${loginJson.data.token}` };
+
+  await fetch(`${baseUrl}/admin/providers/IHG/login`, {
+    method: 'POST',
+    headers: { ...auth, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: '32000000', password: 'provider-secret' }),
+  });
+  await fetch(`${baseUrl}/admin/providers/IHG/manual-authorize`, {
+    method: 'POST',
+    headers: { ...auth, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ note: 'Confirmed account ownership.' }),
+  });
+
+  const syncResponse = await fetch(`${baseUrl}/admin/providers/IHG/sync`, {
+    method: 'POST',
+    headers: { ...auth, 'Content-Type': 'application/json' },
+    body: '{}',
+  });
+  const syncJson = await syncResponse.json();
+  assert.equal(syncResponse.status, 200);
+  assert.equal(syncJson.data.status, 'success');
+  assert.equal(syncJson.data.totalHotels, 1);
+  assert.equal(syncJson.data.totalPrices, 1);
+
+  const hotelsResponse = await fetch(
+    `${baseUrl}/hotels?provider=IHG&city=${encodeURIComponent('北京')}`,
+  );
+  const hotelsJson = await hotelsResponse.json();
+  assert.ok(
+    hotelsJson.items.some((hotel) => hotel.name === 'IHG 北京真实测试酒店'),
+  );
+  const syncedHotel = hotelsJson.items.find(
+    (hotel) => hotel.name === 'IHG 北京真实测试酒店',
+  );
+
+  const priceResponse = await fetch(
+    `${baseUrl}/price?hotelId=${encodeURIComponent(syncedHotel.id)}&date=2026-07-08`,
+  );
+  const priceJson = await priceResponse.json();
+  assert.equal(priceJson.cashPrice, 688);
+  assert.equal(priceJson.pointsPrice, 20000);
+  assert.equal(priceJson.sourceType, 'official');
+
+  const rankResponse = await fetch(
+    `${baseUrl}/rank?provider=IHG&city=${encodeURIComponent('北京')}&date=2026-07-08`,
+  );
+  const rankJson = await rankResponse.json();
+  assert.ok(rankJson.some((hotel) => hotel.hotelName === 'IHG 北京真实测试酒店'));
+
+  const compareResponse = await fetch(
+    `${baseUrl}/compare/rank?provider=IHG&city=${encodeURIComponent('北京')}&date=2026-07-08`,
+  );
+  const compareJson = await compareResponse.json();
+  assert.ok(
+    compareJson.some(
+      (hotel) => hotel.hotelId === syncedHotel.id && hotel.cashPrice === 688,
+    ),
+  );
+});

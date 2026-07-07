@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { maybeSendAdminPage, sendAdminPage } = require('./admin-ui');
+const { fetchIhgRealData } = require('./ihg-real-provider');
 
 const PROVIDERS = ['IHG', 'Marriott', 'Hilton', 'Hyatt', 'Accor'];
 const DATA_DIR = path.join(__dirname, '..', 'data');
@@ -373,7 +374,36 @@ function appendLog(store, job, level, message) {
   });
 }
 
-function syncProvider(request, response) {
+function upsertByProviderHotelId(items, incoming) {
+  const map = new Map(
+    items.map((item) => [`${item.provider}:${item.providerHotelId}`, item]),
+  );
+  for (const item of incoming) {
+    map.set(`${item.provider}:${item.providerHotelId}`, {
+      ...(map.get(`${item.provider}:${item.providerHotelId}`) || {}),
+      ...item,
+    });
+  }
+  return Array.from(map.values());
+}
+
+function upsertPriceSnapshots(items, incoming) {
+  const map = new Map(
+    items.map((item) => [
+      `${item.provider}:${item.providerHotelId}:${item.checkinDate}`,
+      item,
+    ]),
+  );
+  for (const item of incoming) {
+    map.set(`${item.provider}:${item.providerHotelId}:${item.checkinDate}`, {
+      ...(map.get(`${item.provider}:${item.providerHotelId}:${item.checkinDate}`) || {}),
+      ...item,
+    });
+  }
+  return Array.from(map.values());
+}
+
+async function syncProvider(request, response) {
   const provider = request.params.provider;
   if (!PROVIDERS.includes(provider)) {
     response
@@ -383,6 +413,44 @@ function syncProvider(request, response) {
   }
   const store = readStore();
   const job = createSyncJob(provider, 'manual');
+  if (provider === 'IHG' && store.accounts[provider]?.status === 'manual_authorized') {
+    try {
+      const ihgData = await fetchIhgRealData();
+      store.hotelSources = upsertByProviderHotelId(
+        store.hotelSources,
+        ihgData.hotels,
+      );
+      store.priceSnapshots = upsertPriceSnapshots(
+        store.priceSnapshots,
+        ihgData.prices,
+      );
+      job.status = 'success';
+      job.totalHotels = ihgData.hotels.length;
+      job.totalPrices = ihgData.prices.length;
+      job.errorMessage = null;
+      if (store.accounts[provider]) {
+        store.accounts[provider].status = 'active';
+        store.accounts[provider].lastSyncAt = nowIso();
+        store.accounts[provider].lastError = null;
+        store.accounts[provider].updatedAt = nowIso();
+      }
+      store.syncJobs.unshift(job);
+      appendLog(
+        store,
+        job,
+        'info',
+        `IHG真实数据同步完成：酒店 ${job.totalHotels}，价格 ${job.totalPrices}。`,
+      );
+      writeStore(store);
+      response.status(200).json(jsonResponse(job));
+      return;
+    } catch (error) {
+      job.errorMessage =
+        error.code === 'IHG_REAL_SOURCE_NOT_CONFIGURED'
+          ? 'IHG真实同步源未配置：请配置官方/伙伴 API 或真实导入源后再同步。'
+          : `IHG真实同步失败：${error.message || error}`;
+    }
+  }
   if (store.accounts[provider]?.status === 'manual_authorized') {
     job.errorMessage =
       '已人工授权：请导入价格文件或接入官方 API/OAuth 后再同步真实价格。';
@@ -515,5 +583,6 @@ function registerAdminRoutes(app) {
 module.exports = {
   errorResponse,
   jsonResponse,
+  readStore,
   registerAdminRoutes,
 };
