@@ -3,6 +3,10 @@ const crypto = require('node:crypto');
 const os = require('node:os');
 const path = require('node:path');
 const { after, before, test } = require('node:test');
+const {
+  mergeCashAndPoints,
+  parseHotelCard,
+} = require('../src/providers/ihg/ihg.parser');
 
 process.env.ADMIN_SYNC_STORE_FILE = path.join(
   os.tmpdir(),
@@ -539,4 +543,35 @@ test('IHG Playwright session sync writes 90 days of real source prices', async (
   const priceJson = await priceResponse.json();
   assert.equal(priceJson.cashPrice, 689);
   assert.equal(priceJson.sourceType, 'session');
+});
+
+test('IHG parser extracts real visible hotel names, cash prices and points prices', () => {
+  const cashCard = parseHotelCard(
+    {
+      hotelName: 'Regent Beijing',
+      address: '99 Jinbao Road, Dongcheng District, Beijing, Beijing 100005',
+      text:
+        'Regent Beijing 99 Jinbao Road, Dongcheng District, Beijing, Beijing 100005 From 205 USD 186 room + 19 fees per night Select Hotel',
+    },
+    { city: '北京' },
+  );
+  const pointsCard = parseHotelCard(
+    {
+      hotelName: 'Regent Beijing',
+      address: '99 Jinbao Road, Dongcheng District, Beijing, Beijing 100005',
+      text:
+        'Regent Beijing Rooms are not available for Reward Nights on one or more of the selected dates. From 53,000 PTS per night Select Hotel',
+    },
+    { city: '北京' },
+  );
+  const merged = mergeCashAndPoints([cashCard], [pointsCard]);
+
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].provider, 'IHG');
+  assert.equal(merged[0].hotelName, 'Regent Beijing');
+  assert.equal(merged[0].brand, 'Regent');
+  assert.equal(merged[0].city, '北京');
+  assert.equal(merged[0].cashPrice, 205);
+  assert.equal(merged[0].currency, 'USD');
+  assert.equal(merged[0].pointsPrice, 53000);
 });

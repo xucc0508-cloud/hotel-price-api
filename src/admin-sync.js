@@ -2,7 +2,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { maybeSendAdminPage, sendAdminPage } = require('./admin-ui');
-const { fetchIhgRealData } = require('./ihg-real-provider');
+const { createIhgAdapter } = require('./providers/ihg/ihg.adapter');
 const {
   buildSessionMetadata,
   createIhgPlaywrightAuthorization,
@@ -16,6 +16,7 @@ const DATA_DIR = path.join(__dirname, '..', 'data');
 const STORE_FILE =
   process.env.ADMIN_SYNC_STORE_FILE || path.join(DATA_DIR, 'admin-sync-store.json');
 const DEFAULT_CRON = process.env.PRICE_SYNC_CRON || '0 0 * * *';
+const ihgAdapter = createIhgAdapter({ decryptCredential });
 
 function nowIso() {
   return new Date().toISOString();
@@ -544,6 +545,10 @@ function upsertPriceSnapshots(items, incoming) {
   return Array.from(map.values());
 }
 
+async function fetchIhgAuthorizedData(account, options = {}) {
+  return ihgAdapter.fetchAvailability(account, options);
+}
+
 async function syncProvider(request, response) {
   const provider = request.params.provider;
   if (!PROVIDERS.includes(provider)) {
@@ -556,7 +561,7 @@ async function syncProvider(request, response) {
   const job = createSyncJob(provider, 'manual');
   if (provider === 'IHG' && store.accounts[provider]?.status === 'manual_authorized') {
     try {
-      const ihgData = await fetchIhgRealData();
+      const ihgData = await fetchIhgAuthorizedData(store.accounts[provider], {});
       store.hotelSources = upsertByProviderHotelId(
         store.hotelSources,
         ihgData.hotels,
@@ -629,7 +634,7 @@ async function syncProviderWithPlaywright(request, response) {
     ['manual_authorized', 'session_authorized', 'active'].includes(account?.status)
   ) {
     try {
-      const ihgData = await fetchIhgRealData({
+      const ihgData = await fetchIhgAuthorizedData(account, {
         days: requestedDays,
         sourceType: account?.sourceType,
       });
@@ -666,7 +671,7 @@ async function syncProviderWithPlaywright(request, response) {
     } catch (error) {
       job.errorMessage =
         error.code === 'IHG_REAL_SOURCE_NOT_CONFIGURED'
-          ? 'IHG sync source is not configured. Saved sessions are kept encrypted, and no fake price data was written.'
+          ? 'IHG sync source is not configured and live Playwright scraping is unavailable. Saved sessions are kept encrypted, and no fake price data was written.'
           : `IHG real sync failed: ${error.message || error}`;
     }
   }
@@ -752,7 +757,7 @@ function registerAdminRoutes(app) {
     saveIhgPlaywrightSession,
   );
 
-  app.post('/admin/providers/:provider/test', requireAdmin, (request, response) => {
+  app.post('/admin/providers/:provider/test', requireAdmin, async (request, response) => {
     const provider = request.params.provider;
     if (!PROVIDERS.includes(provider)) {
       response
@@ -762,7 +767,21 @@ function registerAdminRoutes(app) {
     }
     const account = readStore().accounts[provider];
     if (provider === 'IHG' && account?.status === 'session_authorized') {
-      response.status(200).json(jsonResponse(testSavedSession(account)));
+      try {
+        response
+          .status(200)
+          .json(jsonResponse({ ...testSavedSession(account), ...(await ihgAdapter.testConnection(account)) }));
+      } catch (error) {
+        response.status(200).json(
+          jsonResponse({
+            provider,
+            success: false,
+            status: 'session_invalid',
+            message: error.message || 'IHG session test failed.',
+            code: error.code || 'IHG_SESSION_TEST_FAILED',
+          }),
+        );
+      }
       return;
     }
     if (account?.status === 'manual_authorized') {
