@@ -424,7 +424,9 @@ function wantsHtml(request) {
 
 function sendAdminPage(_request, response) {
   setNoCacheHeaders(response);
-  response.type('html').send(adminPageHtml());
+  response.type('html');
+  response.status(200);
+  response.end(adminPageHtml());
 }
 
 function maybeSendAdminPage(request, response, next) {

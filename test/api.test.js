@@ -112,6 +112,16 @@ test('admin browser pages and protected JSON APIs are available', async () => {
   assert.match(loginPageHtml, /same-origin/);
   assert.match(loginPageHtml, /adminFetch/);
 
+  const cachedLoginPageResponse = await fetch(`${baseUrl}/admin/login`, {
+    headers: {
+      Accept: 'text/html',
+      'If-None-Match': '*',
+      'If-Modified-Since': new Date().toUTCString(),
+    },
+  });
+  assert.equal(cachedLoginPageResponse.status, 200);
+  assert.match(cachedLoginPageResponse.headers.get('cache-control'), /no-store/);
+
   const protectedResponse = await fetch(`${baseUrl}/admin/providers`);
   assert.equal(protectedResponse.status, 401);
   const protectedJson = await protectedResponse.json();
