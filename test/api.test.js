@@ -1,6 +1,14 @@
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
+const os = require('node:os');
+const path = require('node:path');
 const { after, before, test } = require('node:test');
+
+process.env.ADMIN_SYNC_STORE_FILE = path.join(
+  os.tmpdir(),
+  `hotel-price-api-admin-sync-test-${process.pid}.json`,
+);
+
 const app = require('../src/app');
 
 let server;

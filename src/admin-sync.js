@@ -5,7 +5,8 @@ const { maybeSendAdminPage, sendAdminPage } = require('./admin-ui');
 
 const PROVIDERS = ['IHG', 'Marriott', 'Hilton', 'Hyatt', 'Accor'];
 const DATA_DIR = path.join(__dirname, '..', 'data');
-const STORE_FILE = path.join(DATA_DIR, 'admin-sync-store.json');
+const STORE_FILE =
+  process.env.ADMIN_SYNC_STORE_FILE || path.join(DATA_DIR, 'admin-sync-store.json');
 const DEFAULT_CRON = process.env.PRICE_SYNC_CRON || '0 0 * * *';
 
 function nowIso() {
