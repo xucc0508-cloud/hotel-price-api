@@ -110,6 +110,14 @@ function adminAuthConfigured() {
   );
 }
 
+function missingAdminConfigKeys() {
+  return [
+    'ADMIN_USERNAME',
+    'ADMIN_PASSWORD_HASH',
+    'ADMIN_JWT_SECRET',
+  ].filter((key) => !process.env[key]);
+}
+
 function signToken(username) {
   const now = Math.floor(Date.now() / 1000);
   const payload = {
@@ -178,9 +186,12 @@ function login(request, response) {
   const expectedPasswordHash = process.env.ADMIN_PASSWORD_HASH;
 
   if (!adminAuthConfigured()) {
+    console.warn(
+      `Admin auth configuration missing keys: ${missingAdminConfigKeys().join(', ')}`,
+    );
     response
       .status(503)
-      .json(errorResponse('ADMIN_NOT_CONFIGURED', '管理员账号未配置'));
+      .json(errorResponse('ADMIN_NOT_CONFIGURED', 'Admin account is not configured'));
     return;
   }
 
@@ -194,6 +205,8 @@ function login(request, response) {
   const { token, expiresAt } = signToken(username);
   response.status(200).json(
     jsonResponse({
+      token,
+      username,
       accessToken: token,
       tokenType: 'Bearer',
       expiresAt,

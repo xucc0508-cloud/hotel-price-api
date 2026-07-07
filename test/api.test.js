@@ -62,7 +62,7 @@ test('hotel list and detail match the miniapp contract', async () => {
   }
 });
 
-test('city search supports all required cities and Chinese fuzzy matching', async () => {
+test('city search supports required cities and Chinese fuzzy matching', async () => {
   for (const city of ['北京', '上海', '广州', '深圳', '杭州', '成都']) {
     const response = await fetch(
       `${baseUrl}/hotels?keyword=${encodeURIComponent(city)}`,
@@ -106,7 +106,11 @@ test('admin browser pages and protected JSON APIs are available', async () => {
     headers: { Accept: 'text/html' },
   });
   assert.equal(loginPageResponse.status, 200);
-  assert.match(await loginPageResponse.text(), /管理员登录/);
+  assert.match(loginPageResponse.headers.get('cache-control'), /no-store/);
+  const loginPageHtml = await loginPageResponse.text();
+  assert.match(loginPageHtml, /admin-login-stability-v1/);
+  assert.match(loginPageHtml, /same-origin/);
+  assert.match(loginPageHtml, /adminFetch/);
 
   const protectedResponse = await fetch(`${baseUrl}/admin/providers`);
   assert.equal(protectedResponse.status, 401);
@@ -132,10 +136,14 @@ test('admin login uses configured password hash and token unlocks providers', as
   });
   assert.equal(loginResponse.status, 200);
   const loginJson = await loginResponse.json();
+  assert.equal(loginJson.success, true);
+  assert.equal(loginJson.data.username, 'admin-test');
+  assert.ok(loginJson.data.token);
   assert.ok(loginJson.data.accessToken);
+  assert.equal(loginJson.data.token, loginJson.data.accessToken);
 
   const providersResponse = await fetch(`${baseUrl}/admin/providers`, {
-    headers: { Authorization: `Bearer ${loginJson.data.accessToken}` },
+    headers: { Authorization: `Bearer ${loginJson.data.token}` },
   });
   assert.equal(providersResponse.status, 200);
   const providersJson = await providersResponse.json();
