@@ -50,6 +50,11 @@ git pull --ff-only origin "${BRANCH}"
 log "Installing dependencies from pnpm-lock.yaml..."
 pnpm install --frozen-lockfile
 
+log "Loading environment variables from .env..."
+set -a
+[ -f .env ] && . ./.env
+set +a
+
 log "Starting or reloading ${APP_NAME}..."
 mkdir -p logs
 pm2 startOrReload ecosystem.config.js --env production --update-env
