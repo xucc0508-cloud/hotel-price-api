@@ -119,6 +119,8 @@ test('admin browser pages and protected JSON APIs are available', async () => {
   assert.match(loginPageHtml, /admin-login-stability-v1/);
   assert.match(loginPageHtml, /same-origin/);
   assert.match(loginPageHtml, /adminFetch/);
+  assert.match(loginPageHtml, /startPlaywrightAuthorization/);
+  assert.match(loginPageHtml, /savePlaywrightSession/);
 
   const cachedLoginPageResponse = await fetch(`${baseUrl}/admin/login`, {
     headers: {
@@ -351,4 +353,190 @@ test('IHG real sync source updates public hotel and price APIs', async () => {
       (hotel) => hotel.hotelId === syncedHotel.id && hotel.cashPrice === 688,
     ),
   );
+});
+
+test('IHG Playwright authorization stores encrypted session for a 90 day sync window', async () => {
+  process.env.ADMIN_USERNAME = 'ihg-playwright-admin';
+  process.env.ADMIN_PASSWORD_HASH = `sha256:${crypto
+    .createHash('sha256')
+    .update('ihg-playwright-password')
+    .digest('hex')}`;
+  process.env.ADMIN_JWT_SECRET = 'ihg_playwright_jwt_secret_minimum_32_chars';
+  process.env.CREDENTIAL_ENCRYPTION_KEY =
+    'ihg_playwright_test_encryption_key_minimum_32_chars';
+
+  const loginResponse = await fetch(`${baseUrl}/admin/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      username: 'ihg-playwright-admin',
+      password: 'ihg-playwright-password',
+    }),
+  });
+  const loginJson = await loginResponse.json();
+  const auth = { Authorization: `Bearer ${loginJson.data.token}` };
+
+  await fetch(`${baseUrl}/admin/providers/IHG/login`, {
+    method: 'POST',
+    headers: { ...auth, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: '32000000', password: 'provider-secret' }),
+  });
+
+  const startResponse = await fetch(`${baseUrl}/admin/providers/IHG/playwright/start`, {
+    method: 'POST',
+    headers: { ...auth, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ days: 90 }),
+  });
+  const startJson = await startResponse.json();
+  assert.equal(startResponse.status, 200);
+  assert.equal(startJson.success, true);
+  assert.equal(startJson.data.provider, 'IHG');
+  assert.equal(startJson.data.days, 90);
+  assert.equal(startJson.data.status, 'manual_action_required');
+  assert.match(startJson.data.loginUrl, /^https:\/\//);
+
+  const storageState = {
+    cookies: [
+      {
+        name: 'ihg-session',
+        value: 'redacted-test-cookie',
+        domain: '.ihg.com',
+        path: '/',
+        expires: -1,
+        httpOnly: true,
+        secure: true,
+        sameSite: 'Lax',
+      },
+    ],
+    origins: [],
+  };
+  const saveSessionResponse = await fetch(
+    `${baseUrl}/admin/providers/IHG/playwright/session`,
+    {
+      method: 'POST',
+      headers: { ...auth, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ storageState, days: 90 }),
+    },
+  );
+  const saveSessionJson = await saveSessionResponse.json();
+  assert.equal(saveSessionResponse.status, 200);
+  assert.equal(saveSessionJson.success, true);
+  assert.equal(saveSessionJson.data.status, 'session_authorized');
+  assert.equal(saveSessionJson.data.sourceType, 'playwright_session');
+  assert.equal(saveSessionJson.data.days, 90);
+  assert.equal(saveSessionJson.data.cookieCount, 1);
+  assert.equal(JSON.stringify(saveSessionJson).includes('redacted-test-cookie'), false);
+
+  const providersResponse = await fetch(`${baseUrl}/admin/providers`, {
+    headers: auth,
+  });
+  const providersJson = await providersResponse.json();
+  const ihg = providersJson.data.find((item) => item.provider === 'IHG');
+  assert.equal(ihg.connectionStatus, 'session_authorized');
+  assert.equal(ihg.sourceType, 'playwright_session');
+  assert.equal(ihg.syncWindowDays, 90);
+
+  const testResponse = await fetch(`${baseUrl}/admin/providers/IHG/test`, {
+    method: 'POST',
+    headers: { ...auth, 'Content-Type': 'application/json' },
+    body: '{}',
+  });
+  const testJson = await testResponse.json();
+  assert.equal(testJson.data.status, 'session_authorized');
+  assert.equal(testJson.data.success, true);
+});
+
+test('IHG Playwright session sync writes 90 days of real source prices', async () => {
+  process.env.ADMIN_USERNAME = 'ihg-90-admin';
+  process.env.ADMIN_PASSWORD_HASH = `sha256:${crypto
+    .createHash('sha256')
+    .update('ihg-90-password')
+    .digest('hex')}`;
+  process.env.ADMIN_JWT_SECRET = 'ihg_90_jwt_secret_minimum_32_chars';
+  process.env.CREDENTIAL_ENCRYPTION_KEY =
+    'ihg_90_test_encryption_key_minimum_32_chars';
+
+  const ihgSourceFile = path.join(
+    os.tmpdir(),
+    `hotel-price-api-ihg-source-90-${process.pid}.json`,
+  );
+  const prices = Array.from({ length: 90 }, (_item, index) => {
+    const date = new Date('2026-07-08T00:00:00.000Z');
+    date.setUTCDate(date.getUTCDate() + index);
+    const checkinDate = date.toISOString().slice(0, 10);
+    const checkout = new Date(date);
+    checkout.setUTCDate(checkout.getUTCDate() + 1);
+    return {
+      providerHotelId: 'PEK90',
+      hotelName: 'IHG 90 Day Session Hotel',
+      city: 'Beijing',
+      checkinDate,
+      checkoutDate: checkout.toISOString().slice(0, 10),
+      cashPrice: 600 + index,
+      pointsPrice: 20000,
+      currency: 'CNY',
+      availability: 'available',
+      sourceType: 'session',
+    };
+  });
+  process.env.IHG_SYNC_SOURCE_FILE = ihgSourceFile;
+  require('node:fs').writeFileSync(
+    ihgSourceFile,
+    JSON.stringify({
+      hotels: [
+        {
+          providerHotelId: 'PEK90',
+          hotelName: 'IHG 90 Day Session Hotel',
+          brand: 'IHG',
+          city: 'Beijing',
+          country: 'CN',
+        },
+      ],
+      prices,
+    }),
+  );
+
+  const loginResponse = await fetch(`${baseUrl}/admin/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      username: 'ihg-90-admin',
+      password: 'ihg-90-password',
+    }),
+  });
+  const loginJson = await loginResponse.json();
+  const auth = { Authorization: `Bearer ${loginJson.data.token}` };
+
+  await fetch(`${baseUrl}/admin/providers/IHG/login`, {
+    method: 'POST',
+    headers: { ...auth, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: '32000000', password: 'provider-secret' }),
+  });
+  await fetch(`${baseUrl}/admin/providers/IHG/playwright/session`, {
+    method: 'POST',
+    headers: { ...auth, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      days: 90,
+      storageState: { cookies: [{ name: 'sid', value: 'secret', domain: '.ihg.com' }], origins: [] },
+    }),
+  });
+
+  const syncResponse = await fetch(`${baseUrl}/admin/providers/IHG/sync`, {
+    method: 'POST',
+    headers: { ...auth, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ days: 90 }),
+  });
+  const syncJson = await syncResponse.json();
+  assert.equal(syncResponse.status, 200);
+  assert.equal(syncJson.data.status, 'success');
+  assert.equal(syncJson.data.requestedDays, 90);
+  assert.equal(syncJson.data.totalHotels, 1);
+  assert.equal(syncJson.data.totalPrices, 90);
+
+  const priceResponse = await fetch(
+    `${baseUrl}/price?hotelId=IHG:PEK90&date=2026-10-05`,
+  );
+  const priceJson = await priceResponse.json();
+  assert.equal(priceJson.cashPrice, 689);
+  assert.equal(priceJson.sourceType, 'session');
 });

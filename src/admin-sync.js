@@ -3,6 +3,13 @@ const fs = require('fs');
 const path = require('path');
 const { maybeSendAdminPage, sendAdminPage } = require('./admin-ui');
 const { fetchIhgRealData } = require('./ihg-real-provider');
+const {
+  buildSessionMetadata,
+  createIhgPlaywrightAuthorization,
+  normalizeSyncDays,
+  testSavedSession,
+  validateStorageState,
+} = require('./ihg-playwright-provider');
 
 const PROVIDERS = ['IHG', 'Marriott', 'Hilton', 'Hyatt', 'Accor'];
 const DATA_DIR = path.join(__dirname, '..', 'data');
@@ -83,6 +90,21 @@ function encryptCredential(value) {
       ciphertext: ciphertext.toString('base64url'),
     }),
   ).toString('base64url');
+}
+
+function decryptCredential(value) {
+  const payload = JSON.parse(Buffer.from(String(value), 'base64url').toString('utf8'));
+  const decipher = crypto.createDecipheriv(
+    'aes-256-gcm',
+    encryptionKey(),
+    Buffer.from(payload.iv, 'base64url'),
+  );
+  decipher.setAuthTag(Buffer.from(payload.tag, 'base64url'));
+  const plaintext = Buffer.concat([
+    decipher.update(Buffer.from(payload.ciphertext, 'base64url')),
+    decipher.final(),
+  ]);
+  return JSON.parse(plaintext.toString('utf8'));
 }
 
 function hashPassword(password) {
@@ -235,6 +257,8 @@ function providersStatus() {
       syncedPriceCount,
       recentError: account?.lastError || null,
       manualAuthorizedAt: account?.manualAuthorizedAt || null,
+      playwrightSessionSavedAt: account?.playwrightSessionSavedAt || null,
+      syncWindowDays: account?.syncWindowDays || null,
       sourceType: account?.sourceType || null,
       message: account
         ? '待人工授权：未接入官方 API/OAuth，不会绕过验证码、MFA 或风控。'
@@ -343,6 +367,122 @@ function manualAuthorizeProvider(request, response) {
   );
 }
 
+function startIhgPlaywrightAuthorization(request, response) {
+  const provider = request.params.provider;
+  if (provider !== 'IHG') {
+    response
+      .status(400)
+      .json(errorResponse('UNSUPPORTED_PLAYWRIGHT_PROVIDER', 'Only IHG is supported'));
+    return;
+  }
+
+  const store = readStore();
+  const account = store.accounts.IHG;
+  const authorization = createIhgPlaywrightAuthorization({
+    account,
+    days: request.body?.days,
+    nowIso,
+    stableId,
+  });
+
+  store.accounts.IHG = {
+    ...(account || {
+      provider: 'IHG',
+      usernameMasked: null,
+      createdAt: nowIso(),
+    }),
+    status: 'playwright_authorization_required',
+    sourceType: 'playwright_session',
+    syncWindowDays: authorization.days,
+    playwrightAuthTask: {
+      id: authorization.id,
+      status: authorization.status,
+      loginUrl: authorization.loginUrl,
+      createdAt: authorization.createdAt,
+    },
+    lastError:
+      'IHG Playwright authorization started. Complete login, CAPTCHA and MFA manually, then save storageState.',
+    updatedAt: nowIso(),
+  };
+  store.syncLogs.push({
+    id: stableId('log'),
+    jobId: null,
+    provider: 'IHG',
+    level: 'info',
+    message:
+      'IHG Playwright authorization started for a 90-day price sync window.',
+    createdAt: nowIso(),
+  });
+  writeStore(store);
+
+  response.status(200).json(jsonResponse(authorization));
+}
+
+function saveIhgPlaywrightSession(request, response) {
+  const provider = request.params.provider;
+  if (provider !== 'IHG') {
+    response
+      .status(400)
+      .json(errorResponse('UNSUPPORTED_PLAYWRIGHT_PROVIDER', 'Only IHG is supported'));
+    return;
+  }
+
+  const storageState = request.body?.storageState;
+  const validation = validateStorageState(storageState);
+  if (!validation.ok) {
+    response
+      .status(400)
+      .json(errorResponse(validation.code, 'Invalid Playwright storageState'));
+    return;
+  }
+
+  const store = readStore();
+  const account = store.accounts.IHG || {
+    provider: 'IHG',
+    usernameMasked: null,
+    createdAt: nowIso(),
+  };
+  const metadata = buildSessionMetadata(storageState, request.body?.days, nowIso);
+  store.accounts.IHG = {
+    ...account,
+    encryptedSession: encryptCredential({
+      type: 'playwright_storage_state',
+      storageState,
+      savedAt: metadata.playwrightSessionSavedAt,
+    }),
+    status: metadata.status,
+    sourceType: metadata.sourceType,
+    syncWindowDays: metadata.syncWindowDays,
+    playwrightSessionSavedAt: metadata.playwrightSessionSavedAt,
+    lastLoginAt: metadata.playwrightSessionSavedAt,
+    lastError: null,
+    updatedAt: metadata.playwrightSessionSavedAt,
+  };
+  store.syncLogs.push({
+    id: stableId('log'),
+    jobId: null,
+    provider: 'IHG',
+    level: 'info',
+    message: `IHG Playwright session saved; sync window ${metadata.syncWindowDays} days.`,
+    createdAt: metadata.playwrightSessionSavedAt,
+  });
+  writeStore(store);
+
+  response.status(200).json(
+    jsonResponse({
+      provider: 'IHG',
+      status: metadata.status,
+      sourceType: metadata.sourceType,
+      days: metadata.syncWindowDays,
+      cookieCount: metadata.cookieCount,
+      sessionSaved: true,
+      savedAt: metadata.playwrightSessionSavedAt,
+      message:
+        'IHG Playwright session saved. Cookies are encrypted and never returned by API.',
+    }),
+  );
+}
+
 function createSyncJob(provider, type) {
   const store = readStore();
   const account = provider ? store.accounts[provider] : null;
@@ -355,6 +495,7 @@ function createSyncJob(provider, type) {
     finishedAt: nowIso(),
     totalHotels: 0,
     totalPrices: 0,
+    requestedDays: null,
     errorMessage: account
       ? '待人工授权：未接入官方 API/OAuth。'
       : '未登录，暂无真实价格数据。',
@@ -468,6 +609,89 @@ async function syncProvider(request, response) {
   response.status(200).json(jsonResponse(job));
 }
 
+async function syncProviderWithPlaywright(request, response) {
+  const provider = request.params.provider;
+  if (!PROVIDERS.includes(provider)) {
+    response
+      .status(400)
+      .json(errorResponse('UNSUPPORTED_PROVIDER', 'Unsupported provider'));
+    return;
+  }
+
+  const store = readStore();
+  const account = store.accounts[provider];
+  const requestedDays = normalizeSyncDays(request.body?.days || account?.syncWindowDays);
+  const job = createSyncJob(provider, 'manual');
+  job.requestedDays = requestedDays;
+
+  if (
+    provider === 'IHG' &&
+    ['manual_authorized', 'session_authorized', 'active'].includes(account?.status)
+  ) {
+    try {
+      const ihgData = await fetchIhgRealData({
+        days: requestedDays,
+        sourceType: account?.sourceType,
+      });
+      store.hotelSources = upsertByProviderHotelId(
+        store.hotelSources,
+        ihgData.hotels,
+      );
+      store.priceSnapshots = upsertPriceSnapshots(
+        store.priceSnapshots,
+        ihgData.prices,
+      );
+      job.status = 'success';
+      job.totalHotels = ihgData.hotels.length;
+      job.totalPrices = ihgData.prices.length;
+      job.errorMessage = null;
+      job.finishedAt = nowIso();
+      if (store.accounts[provider]) {
+        store.accounts[provider].status = 'active';
+        store.accounts[provider].lastSyncAt = job.finishedAt;
+        store.accounts[provider].syncWindowDays = requestedDays;
+        store.accounts[provider].lastError = null;
+        store.accounts[provider].updatedAt = job.finishedAt;
+      }
+      store.syncJobs.unshift(job);
+      appendLog(
+        store,
+        job,
+        'info',
+        `IHG real data sync completed: hotels ${job.totalHotels}, prices ${job.totalPrices}, days ${requestedDays}.`,
+      );
+      writeStore(store);
+      response.status(200).json(jsonResponse(job));
+      return;
+    } catch (error) {
+      job.errorMessage =
+        error.code === 'IHG_REAL_SOURCE_NOT_CONFIGURED'
+          ? 'IHG sync source is not configured. Saved sessions are kept encrypted, and no fake price data was written.'
+          : `IHG real sync failed: ${error.message || error}`;
+    }
+  }
+
+  if (account?.status === 'session_authorized') {
+    job.errorMessage =
+      'IHG Playwright session is saved, but the live price scraper/source is not configured. No fake price data was written.';
+  } else if (account?.status === 'manual_authorized') {
+    job.errorMessage =
+      'Manual authorization is recorded. 请导入价格文件或接入官方 API before syncing real prices.';
+  }
+
+  store.syncJobs.unshift(job);
+  appendLog(store, job, 'warn', job.errorMessage);
+  if (store.accounts[provider]) {
+    if (!['manual_authorized', 'session_authorized'].includes(store.accounts[provider].status)) {
+      store.accounts[provider].status = 'expired';
+    }
+    store.accounts[provider].lastError = job.errorMessage;
+    store.accounts[provider].updatedAt = nowIso();
+  }
+  writeStore(store);
+  response.status(200).json(jsonResponse(job));
+}
+
 function syncAll(_request, response) {
   const store = readStore();
   const jobs = PROVIDERS.map((provider) => createSyncJob(provider, 'manual'));
@@ -516,6 +740,18 @@ function registerAdminRoutes(app) {
     manualAuthorizeProvider,
   );
 
+  app.post(
+    '/admin/providers/:provider/playwright/start',
+    requireAdmin,
+    startIhgPlaywrightAuthorization,
+  );
+
+  app.post(
+    '/admin/providers/:provider/playwright/session',
+    requireAdmin,
+    saveIhgPlaywrightSession,
+  );
+
   app.post('/admin/providers/:provider/test', requireAdmin, (request, response) => {
     const provider = request.params.provider;
     if (!PROVIDERS.includes(provider)) {
@@ -525,6 +761,10 @@ function registerAdminRoutes(app) {
       return;
     }
     const account = readStore().accounts[provider];
+    if (provider === 'IHG' && account?.status === 'session_authorized') {
+      response.status(200).json(jsonResponse(testSavedSession(account)));
+      return;
+    }
     if (account?.status === 'manual_authorized') {
       response.status(200).json(
         jsonResponse({
@@ -547,7 +787,7 @@ function registerAdminRoutes(app) {
     );
   });
 
-  app.post('/admin/providers/:provider/sync', requireAdmin, syncProvider);
+  app.post('/admin/providers/:provider/sync', requireAdmin, syncProviderWithPlaywright);
 
   app.post('/admin/providers/:provider/disable', requireAdmin, (request, response) => {
     const provider = request.params.provider;

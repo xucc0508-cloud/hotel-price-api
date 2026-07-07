@@ -53,16 +53,17 @@ function adminPageHtml() {
     .login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; }
     .login-card { width: min(500px, 100%); }
     label { display: block; color: var(--muted); font-size: 13px; margin: 14px 0 7px; }
-    input {
+    input, textarea {
       width: 100%;
-      height: 44px;
       border: 1px solid #c9daf4;
       border-radius: 12px;
       padding: 0 12px;
       font-size: 15px;
       outline: none;
     }
-    input:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(22,119,255,.12); }
+    input { height: 44px; }
+    textarea { min-height: 150px; padding: 12px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    input:focus, textarea:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(22,119,255,.12); }
     button {
       border: 0;
       border-radius: 12px;
@@ -173,7 +174,7 @@ function adminPageHtml() {
       return String(value ?? "").replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
     }
     function statusBadge(status) {
-      const cls = status === "active" || status === "success" || status === "info" || status === "manual_authorized"
+      const cls = status === "active" || status === "success" || status === "info" || status === "manual_authorized" || status === "session_authorized"
         ? "ok"
         : status === "error" || status === "expired" || status === "failed"
           ? "error"
@@ -354,10 +355,32 @@ function adminPageHtml() {
         '<a class="badge" href="/admin/sync-logs">查看日志</a></div></div>';
     }
 
+    function providerCardV2(item) {
+      const isIhg = item.provider === "IHG";
+      const goodStatus = ["active", "manual_authorized", "session_authorized"].includes(item.connectionStatus);
+      const recentErrorClass = goodStatus ? "success-text" : "error-text";
+      const ihgActions = isIhg
+        ? '<button class="secondary" onclick="startPlaywrightAuthorization(\\'' + item.provider + '\\')">IHG Playwright授权</button>' +
+          '<button class="secondary" onclick="openPlaywrightSessionModal(\\'' + item.provider + '\\')">保存Session</button>'
+        : '';
+      return '<div class="card"><div class="row" style="justify-content:space-between"><h2>' + escapeHtml(item.provider) + '</h2>' + statusBadge(item.connectionStatus) + '</div>' +
+        '<p class="muted">账号：' + escapeHtml(item.usernameMasked || "未录入") + '</p>' +
+        '<p>最近同步：' + escapeHtml(item.lastSyncAt || "暂无") + '</p>' +
+        '<p>酒店：' + item.syncedHotelCount + ' / 价格：' + item.syncedPriceCount + '</p>' +
+        '<p class="muted">同步窗口：' + escapeHtml(item.syncWindowDays || 90) + ' 天</p>' +
+        '<p class="' + recentErrorClass + '">' + escapeHtml(item.recentError || "") + '</p>' +
+        '<div class="row"><button onclick="openProviderLogin(\\'' + item.provider + '\\')">登录账号</button>' +
+        '<button class="secondary" onclick="manualAuthorizeProvider(\\'' + item.provider + '\\')">人工授权</button>' +
+        ihgActions +
+        '<button class="secondary" onclick="testProvider(\\'' + item.provider + '\\')">测试连接</button>' +
+        '<button class="secondary" onclick="syncProvider(\\'' + item.provider + '\\')">同步90天价格</button>' +
+        '<a class="badge" href="/admin/sync-logs">查看日志</a></div></div>';
+    }
+
     async function renderProviders() {
       const data = await adminFetch("/admin/providers");
       const normalized = providers.map(name => data.find(item => item.provider === name) || { provider: name, connectionStatus: "expired", syncedHotelCount: 0, syncedPriceCount: 0 });
-      layout("Providers", '<div class="provider-grid">' + normalized.map(providerCard).join("") + '</div>');
+      layout("Providers", '<div class="provider-grid">' + normalized.map(providerCardV2).join("") + '</div>');
     }
     async function renderJobs() {
       const data = await adminFetch("/admin/sync/jobs");
@@ -413,9 +436,59 @@ function adminPageHtml() {
       }
     }
 
+    async function startPlaywrightAuthorization(provider) {
+      if (provider !== "IHG") {
+        alert("当前阶段只支持 IHG Playwright 授权。");
+        return;
+      }
+      try {
+        const result = await adminFetch("/admin/providers/" + provider + "/playwright/start", {
+          method: "POST",
+          body: JSON.stringify({ days: 90 }),
+        });
+        modal.className = "modal show";
+        modal.innerHTML = '<div class="card"><h2>IHG Playwright 人工授权</h2>' +
+          '<p>同步窗口：' + escapeHtml(result.days) + ' 天</p>' +
+          '<p>请打开 IHG 登录页，手动完成账号、验证码/MFA。完成后导出 Playwright storageState JSON，再点“保存Session”。</p>' +
+          '<p><a class="badge" target="_blank" rel="noopener" href="' + escapeHtml(result.loginUrl) + '">打开 IHG 登录页</a></p>' +
+          '<div class="warn-box">不会绕过验证码、MFA 或风控；没有真实 session 时不会写入真实价格。</div>' +
+          '<div class="row" style="margin-top:18px"><button onclick="openPlaywrightSessionModal(\\'' + provider + '\\')">保存Session</button><button class="secondary" onclick="closeModal()">关闭</button></div></div>';
+        await renderProviders();
+      } catch (error) {
+        alert(String(error.code ? error.code + ": " + error.message : error.message || error));
+      }
+    }
+
+    function openPlaywrightSessionModal(provider) {
+      modal.className = "modal show";
+      modal.innerHTML = '<div class="card"><h2>' + escapeHtml(provider) + ' 保存 Playwright Session</h2>' +
+        '<p class="muted">粘贴 Playwright storageState JSON。Cookie 会加密保存，接口不会返回 Cookie 内容。</p>' +
+        '<label>storageState JSON</label><textarea id="playwrightStorageState" autocomplete="off" placeholder="{ &quot;cookies&quot;: [], &quot;origins&quot;: [] }"></textarea>' +
+        '<label>同步天数</label><input id="playwrightDays" value="90" inputmode="numeric" />' +
+        '<div class="row" style="margin-top:18px"><button onclick="savePlaywrightSession(\\'' + provider + '\\')">加密保存Session</button><button class="secondary" onclick="closeModal()">取消</button></div>' +
+        '<p id="playwrightSessionMessage" class="muted"></p></div>';
+    }
+
+    async function savePlaywrightSession(provider) {
+      const messageEl = document.getElementById("playwrightSessionMessage");
+      try {
+        const raw = document.getElementById("playwrightStorageState").value;
+        const days = Number(document.getElementById("playwrightDays").value || 90);
+        const storageState = JSON.parse(raw);
+        const result = await adminFetch("/admin/providers/" + provider + "/playwright/session", {
+          method: "POST",
+          body: JSON.stringify({ storageState, days }),
+        });
+        messageEl.textContent = "已保存Session；Cookie数量：" + result.cookieCount + "；同步窗口：" + result.days + "天";
+        setTimeout(() => { closeModal(); renderProviders(); }, 900);
+      } catch (error) {
+        messageEl.textContent = String(error.code ? error.code + ": " + error.message : error.message || error);
+      }
+    }
+
     async function syncProvider(provider) {
       try {
-        const result = await adminFetch("/admin/providers/" + provider + "/sync", { method: "POST", body: "{}" });
+        const result = await adminFetch("/admin/providers/" + provider + "/sync", { method: "POST", body: JSON.stringify({ days: 90 }) });
         alert("已创建任务：" + result.id + "\\n" + (result.errorMessage || ""));
       } catch (error) { alert(String(error.code ? error.code + ": " + error.message : error.message || error)); }
     }
