@@ -42,7 +42,7 @@ jobs:
           test "${RUNNER_ARCH}" = "X64"
 
       - name: Deploy production
-        timeout-minutes: 10
+        timeout-minutes: 25
         shell: bash
         run: |
           set -Eeuo pipefail

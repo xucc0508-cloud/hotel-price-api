@@ -50,6 +50,13 @@ git pull --ff-only origin "${BRANCH}"
 log "Installing dependencies from pnpm-lock.yaml..."
 pnpm install --frozen-lockfile
 
+log "Ensuring Playwright Chromium is available for provider sync..."
+if command -v sudo >/dev/null 2>&1; then
+  pnpm exec playwright install --with-deps chromium
+else
+  pnpm exec playwright install chromium
+fi
+
 log "Loading environment variables from .env..."
 set -a
 [ -f .env ] && . ./.env
