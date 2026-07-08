@@ -450,6 +450,91 @@ test('IHG Playwright authorization stores encrypted session for a 90 day sync wi
   assert.equal(testJson.data.success, true);
 });
 
+test('Marriott Playwright authorization stores encrypted session without enabling fake sync', async () => {
+  process.env.ADMIN_USERNAME = 'marriott-playwright-admin';
+  process.env.ADMIN_PASSWORD_HASH = `sha256:${crypto
+    .createHash('sha256')
+    .update('marriott-playwright-password')
+    .digest('hex')}`;
+  process.env.ADMIN_JWT_SECRET = 'marriott_playwright_jwt_secret_minimum_32_chars';
+  process.env.CREDENTIAL_ENCRYPTION_KEY =
+    'marriott_playwright_test_encryption_key_minimum_32_chars';
+
+  const loginResponse = await fetch(`${baseUrl}/admin/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      username: 'marriott-playwright-admin',
+      password: 'marriott-playwright-password',
+    }),
+  });
+  const loginJson = await loginResponse.json();
+  const auth = { Authorization: `Bearer ${loginJson.data.token}` };
+
+  await fetch(`${baseUrl}/admin/providers/Marriott/login`, {
+    method: 'POST',
+    headers: { ...auth, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'member@example.com', password: 'provider-secret' }),
+  });
+
+  const startResponse = await fetch(`${baseUrl}/admin/providers/Marriott/playwright/start`, {
+    method: 'POST',
+    headers: { ...auth, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ days: 90 }),
+  });
+  const startJson = await startResponse.json();
+  assert.equal(startResponse.status, 200);
+  assert.equal(startJson.success, true);
+  assert.equal(startJson.data.provider, 'Marriott');
+  assert.equal(startJson.data.days, 90);
+  assert.equal(startJson.data.status, 'manual_action_required');
+  assert.match(startJson.data.loginUrl, /^https:\/\//);
+
+  const saveSessionResponse = await fetch(
+    `${baseUrl}/admin/providers/Marriott/playwright/session`,
+    {
+      method: 'POST',
+      headers: { ...auth, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        days: 90,
+        storageState: {
+          cookies: [{ name: 'marriott-session', value: 'secret-cookie', domain: '.marriott.com' }],
+          origins: [],
+        },
+      }),
+    },
+  );
+  const saveSessionJson = await saveSessionResponse.json();
+  assert.equal(saveSessionResponse.status, 200);
+  assert.equal(saveSessionJson.success, true);
+  assert.equal(saveSessionJson.data.provider, 'Marriott');
+  assert.equal(saveSessionJson.data.status, 'session_authorized');
+  assert.equal(saveSessionJson.data.sourceType, 'playwright_session');
+  assert.equal(saveSessionJson.data.days, 90);
+  assert.equal(JSON.stringify(saveSessionJson).includes('secret-cookie'), false);
+
+  const testResponse = await fetch(`${baseUrl}/admin/providers/Marriott/test`, {
+    method: 'POST',
+    headers: { ...auth, 'Content-Type': 'application/json' },
+    body: '{}',
+  });
+  const testJson = await testResponse.json();
+  assert.equal(testResponse.status, 200);
+  assert.equal(testJson.data.status, 'session_authorized');
+  assert.equal(testJson.data.success, true);
+  assert.match(testJson.data.message, /Marriott Playwright session is saved/);
+
+  const syncResponse = await fetch(`${baseUrl}/admin/providers/Marriott/sync`, {
+    method: 'POST',
+    headers: { ...auth, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ days: 90 }),
+  });
+  const syncJson = await syncResponse.json();
+  assert.equal(syncResponse.status, 200);
+  assert.equal(syncJson.data.status, 'failed');
+  assert.match(syncJson.data.errorMessage, /Marriott Playwright session is saved, but live price scraping is not configured/);
+});
+
 test('IHG Playwright session sync writes 90 days of real source prices', async () => {
   process.env.ADMIN_USERNAME = 'ihg-90-admin';
   process.env.ADMIN_PASSWORD_HASH = `sha256:${crypto

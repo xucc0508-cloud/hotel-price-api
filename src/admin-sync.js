@@ -4,10 +4,11 @@ const path = require('path');
 const { maybeSendAdminPage, sendAdminPage } = require('./admin-ui');
 const { createIhgAdapter } = require('./providers/ihg/ihg.adapter');
 const {
-  buildSessionMetadata,
-  createIhgPlaywrightAuthorization,
+  buildProviderSessionMetadata,
+  createProviderPlaywrightAuthorization,
   normalizeSyncDays,
-  testSavedSession,
+  supportedPlaywrightProvider,
+  testSavedProviderSession,
   validateStorageState,
 } = require('./ihg-playwright-provider');
 
@@ -368,27 +369,27 @@ function manualAuthorizeProvider(request, response) {
   );
 }
 
-function startIhgPlaywrightAuthorization(request, response) {
+function startPlaywrightAuthorization(request, response) {
   const provider = request.params.provider;
-  if (provider !== 'IHG') {
+  if (!supportedPlaywrightProvider(provider)) {
     response
       .status(400)
-      .json(errorResponse('UNSUPPORTED_PLAYWRIGHT_PROVIDER', 'Only IHG is supported'));
+      .json(errorResponse('UNSUPPORTED_PLAYWRIGHT_PROVIDER', `${provider} Playwright authorization is not supported`));
     return;
   }
 
   const store = readStore();
-  const account = store.accounts.IHG;
-  const authorization = createIhgPlaywrightAuthorization({
+  const account = store.accounts[provider];
+  const authorization = createProviderPlaywrightAuthorization(provider, {
     account,
     days: request.body?.days,
     nowIso,
     stableId,
   });
 
-  store.accounts.IHG = {
+  store.accounts[provider] = {
     ...(account || {
-      provider: 'IHG',
+      provider,
       usernameMasked: null,
       createdAt: nowIso(),
     }),
@@ -402,16 +403,16 @@ function startIhgPlaywrightAuthorization(request, response) {
       createdAt: authorization.createdAt,
     },
     lastError:
-      'IHG Playwright authorization started. Complete login, CAPTCHA and MFA manually, then save storageState.',
+      `${provider} Playwright authorization started. Complete login, CAPTCHA and MFA manually, then save storageState.`,
     updatedAt: nowIso(),
   };
   store.syncLogs.push({
     id: stableId('log'),
     jobId: null,
-    provider: 'IHG',
+    provider,
     level: 'info',
     message:
-      'IHG Playwright authorization started for a 90-day price sync window.',
+      `${provider} Playwright authorization started for a ${authorization.days}-day price sync window.`,
     createdAt: nowIso(),
   });
   writeStore(store);
@@ -419,12 +420,12 @@ function startIhgPlaywrightAuthorization(request, response) {
   response.status(200).json(jsonResponse(authorization));
 }
 
-function saveIhgPlaywrightSession(request, response) {
+function savePlaywrightSession(request, response) {
   const provider = request.params.provider;
-  if (provider !== 'IHG') {
+  if (!supportedPlaywrightProvider(provider)) {
     response
       .status(400)
-      .json(errorResponse('UNSUPPORTED_PLAYWRIGHT_PROVIDER', 'Only IHG is supported'));
+      .json(errorResponse('UNSUPPORTED_PLAYWRIGHT_PROVIDER', `${provider} Playwright authorization is not supported`));
     return;
   }
 
@@ -438,13 +439,13 @@ function saveIhgPlaywrightSession(request, response) {
   }
 
   const store = readStore();
-  const account = store.accounts.IHG || {
-    provider: 'IHG',
+  const account = store.accounts[provider] || {
+    provider,
     usernameMasked: null,
     createdAt: nowIso(),
   };
-  const metadata = buildSessionMetadata(storageState, request.body?.days, nowIso);
-  store.accounts.IHG = {
+  const metadata = buildProviderSessionMetadata(provider, storageState, request.body?.days, nowIso);
+  store.accounts[provider] = {
     ...account,
     encryptedSession: encryptCredential({
       type: 'playwright_storage_state',
@@ -462,16 +463,16 @@ function saveIhgPlaywrightSession(request, response) {
   store.syncLogs.push({
     id: stableId('log'),
     jobId: null,
-    provider: 'IHG',
+    provider,
     level: 'info',
-    message: `IHG Playwright session saved; sync window ${metadata.syncWindowDays} days.`,
+    message: `${provider} Playwright session saved; sync window ${metadata.syncWindowDays} days.`,
     createdAt: metadata.playwrightSessionSavedAt,
   });
   writeStore(store);
 
   response.status(200).json(
     jsonResponse({
-      provider: 'IHG',
+      provider,
       status: metadata.status,
       sourceType: metadata.sourceType,
       days: metadata.syncWindowDays,
@@ -479,7 +480,7 @@ function saveIhgPlaywrightSession(request, response) {
       sessionSaved: true,
       savedAt: metadata.playwrightSessionSavedAt,
       message:
-        'IHG Playwright session saved. Cookies are encrypted and never returned by API.',
+        `${provider} Playwright session saved. Cookies are encrypted and never returned by API.`,
     }),
   );
 }
@@ -684,7 +685,9 @@ async function syncProviderWithPlaywright(request, response) {
 
   if (!attemptedLiveSync && account?.status === 'session_authorized') {
     job.errorMessage =
-      'IHG Playwright session is saved, but the live price scraper/source is not configured. No fake price data was written.';
+      provider === 'IHG'
+        ? 'IHG Playwright session is saved, but the live price scraper/source is not configured. No fake price data was written.'
+        : `${provider} Playwright session is saved, but live price scraping is not configured. No fake price data was written.`;
   } else if (!attemptedLiveSync && account?.status === 'manual_authorized') {
     job.errorMessage =
       'Manual authorization is recorded. 请导入价格文件或接入官方 API before syncing real prices.';
@@ -754,13 +757,13 @@ function registerAdminRoutes(app) {
   app.post(
     '/admin/providers/:provider/playwright/start',
     requireAdmin,
-    startIhgPlaywrightAuthorization,
+    startPlaywrightAuthorization,
   );
 
   app.post(
     '/admin/providers/:provider/playwright/session',
     requireAdmin,
-    saveIhgPlaywrightSession,
+    savePlaywrightSession,
   );
 
   app.post('/admin/providers/:provider/test', requireAdmin, async (request, response) => {
@@ -776,7 +779,7 @@ function registerAdminRoutes(app) {
       try {
         response
           .status(200)
-          .json(jsonResponse({ ...testSavedSession(account), ...(await ihgAdapter.testConnection(account)) }));
+          .json(jsonResponse({ ...testSavedProviderSession(provider, account), ...(await ihgAdapter.testConnection(account)) }));
       } catch (error) {
         response.status(200).json(
           jsonResponse({
@@ -788,6 +791,10 @@ function registerAdminRoutes(app) {
           }),
         );
       }
+      return;
+    }
+    if (supportedPlaywrightProvider(provider) && account?.status === 'session_authorized') {
+      response.status(200).json(jsonResponse(testSavedProviderSession(provider, account)));
       return;
     }
     if (account?.status === 'manual_authorized') {

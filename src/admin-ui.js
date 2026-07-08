@@ -356,11 +356,11 @@ function adminPageHtml() {
     }
 
     function providerCardV2(item) {
-      const isIhg = item.provider === "IHG";
+      const supportsPlaywright = ["IHG", "Marriott"].includes(item.provider);
       const goodStatus = ["active", "manual_authorized", "session_authorized"].includes(item.connectionStatus);
       const recentErrorClass = goodStatus ? "success-text" : "error-text";
-      const ihgActions = isIhg
-        ? '<button class="secondary" onclick="startPlaywrightAuthorization(\\'' + item.provider + '\\')">IHG Playwright授权</button>' +
+      const playwrightActions = supportsPlaywright
+        ? '<button class="secondary" onclick="startPlaywrightAuthorization(\\'' + item.provider + '\\')">' + escapeHtml(item.provider) + ' Playwright授权</button>' +
           '<button class="secondary" onclick="openPlaywrightSessionModal(\\'' + item.provider + '\\')">保存Session</button>'
         : '';
       return '<div class="card"><div class="row" style="justify-content:space-between"><h2>' + escapeHtml(item.provider) + '</h2>' + statusBadge(item.connectionStatus) + '</div>' +
@@ -371,7 +371,7 @@ function adminPageHtml() {
         '<p class="' + recentErrorClass + '">' + escapeHtml(item.recentError || "") + '</p>' +
         '<div class="row"><button onclick="openProviderLogin(\\'' + item.provider + '\\')">登录账号</button>' +
         '<button class="secondary" onclick="manualAuthorizeProvider(\\'' + item.provider + '\\')">人工授权</button>' +
-        ihgActions +
+        playwrightActions +
         '<button class="secondary" onclick="testProvider(\\'' + item.provider + '\\')">测试连接</button>' +
         '<button class="secondary" onclick="syncProvider(\\'' + item.provider + '\\')">同步90天价格</button>' +
         '<a class="badge" href="/admin/sync-logs">查看日志</a></div></div>';
@@ -437,20 +437,16 @@ function adminPageHtml() {
     }
 
     async function startPlaywrightAuthorization(provider) {
-      if (provider !== "IHG") {
-        alert("当前阶段只支持 IHG Playwright 授权。");
-        return;
-      }
       try {
         const result = await adminFetch("/admin/providers/" + provider + "/playwright/start", {
           method: "POST",
           body: JSON.stringify({ days: 90 }),
         });
         modal.className = "modal show";
-        modal.innerHTML = '<div class="card"><h2>IHG Playwright 人工授权</h2>' +
+        modal.innerHTML = '<div class="card"><h2>' + escapeHtml(result.provider || provider) + ' Playwright 人工授权</h2>' +
           '<p>同步窗口：' + escapeHtml(result.days) + ' 天</p>' +
-          '<p>请打开 IHG 登录页，手动完成账号、验证码/MFA。完成后导出 Playwright storageState JSON，再点“保存Session”。</p>' +
-          '<p><a class="badge" target="_blank" rel="noopener" href="' + escapeHtml(result.loginUrl) + '">打开 IHG 登录页</a></p>' +
+          '<p>请打开 ' + escapeHtml(result.provider || provider) + ' 登录页，手动完成账号、验证码/MFA。完成后导出 Playwright storageState JSON，再点“保存Session”。</p>' +
+          '<p><a class="badge" target="_blank" rel="noopener" href="' + escapeHtml(result.loginUrl) + '">打开 ' + escapeHtml(result.provider || provider) + ' 登录页</a></p>' +
           '<div class="warn-box">不会绕过验证码、MFA 或风控；没有真实 session 时不会写入真实价格。</div>' +
           '<div class="row" style="margin-top:18px"><button onclick="openPlaywrightSessionModal(\\'' + provider + '\\')">保存Session</button><button class="secondary" onclick="closeModal()">关闭</button></div></div>';
         await renderProviders();
