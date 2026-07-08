@@ -57,6 +57,27 @@ else
   pnpm exec playwright install chromium
 fi
 
+install_remote_browser_tools() {
+  if ! command -v sudo >/dev/null 2>&1; then
+    log "WARNING: sudo is unavailable; skipping x11vnc/novnc/websockify package check."
+    return
+  fi
+
+  if command -v Xvfb >/dev/null 2>&1 &&
+    command -v x11vnc >/dev/null 2>&1 &&
+    command -v websockify >/dev/null 2>&1 &&
+    [[ -d /usr/share/novnc ]]; then
+    log "Remote visual browser tools already available: Xvfb, x11vnc, novnc, websockify."
+    return
+  fi
+
+  log "Installing remote visual browser tools: xvfb x11vnc novnc websockify..."
+  sudo -n apt-get update
+  sudo -n apt-get install -y xvfb x11vnc novnc websockify
+}
+
+install_remote_browser_tools
+
 log "Loading environment variables from .env..."
 set -a
 [ -f .env ] && . ./.env

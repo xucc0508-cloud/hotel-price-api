@@ -128,6 +128,14 @@ function adminPageHtml() {
     }
     .modal.show { display: flex; }
     .modal .card { width: min(520px, 100%); margin: 0; }
+    .modal .remote-card { width: min(1120px, 100%); max-height: 94vh; overflow: auto; }
+    .remote-frame {
+      width: 100%;
+      height: min(680px, 68vh);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: #071b3a;
+    }
     @media (max-width: 900px) {
       .shell { grid-template-columns: 1fr; }
       .grid, .provider-grid { grid-template-columns: 1fr; }
@@ -148,6 +156,7 @@ function adminPageHtml() {
     const modal = document.getElementById("modal");
     const providers = ["IHG", "Marriott", "Hilton", "Hyatt", "Accor"];
     const retryDelays = [500, 1500];
+    const remoteAuthTimers = {};
     let lastRequestStatus = "none";
 
     function token() {
@@ -360,7 +369,8 @@ function adminPageHtml() {
       const goodStatus = ["active", "manual_authorized", "session_authorized"].includes(item.connectionStatus);
       const recentErrorClass = goodStatus ? "success-text" : "error-text";
       const playwrightActions = supportsPlaywright
-        ? '<button class="secondary" onclick="startPlaywrightAuthorization(\\'' + item.provider + '\\')">' + escapeHtml(item.provider) + ' Playwright授权</button>' +
+        ? '<button class="secondary" onclick="startRemoteAuthorization(\\'' + item.provider + '\\')">远程可视化登录</button>' +
+          '<button class="secondary" onclick="startPlaywrightAuthorization(\\'' + item.provider + '\\')">' + escapeHtml(item.provider) + ' Playwright授权</button>' +
           '<button class="secondary" onclick="openPlaywrightSessionModal(\\'' + item.provider + '\\')">保存Session</button>'
         : '';
       return '<div class="card"><div class="row" style="justify-content:space-between"><h2>' + escapeHtml(item.provider) + '</h2>' + statusBadge(item.connectionStatus) + '</div>' +
@@ -402,7 +412,14 @@ function adminPageHtml() {
         '<div class="row" style="margin-top:18px"><button onclick="saveProviderLogin(\\'' + provider + '\\')">保存加密凭据</button><button class="secondary" onclick="closeModal()">取消</button></div>' +
         '<p id="providerMessage" class="muted"></p></div>';
     }
-    function closeModal() { modal.className = "modal"; modal.innerHTML = ""; }
+    function closeModal() {
+      Object.keys(remoteAuthTimers).forEach((key) => {
+        clearTimeout(remoteAuthTimers[key]);
+        delete remoteAuthTimers[key];
+      });
+      modal.className = "modal";
+      modal.innerHTML = "";
+    }
     async function saveProviderLogin(provider) {
       const username = document.getElementById("providerUsername").value;
       const password = document.getElementById("providerPassword").value;
@@ -430,6 +447,87 @@ function adminPageHtml() {
           body: JSON.stringify({ note: "Confirmed from admin console." }),
         });
         alert(result.message || "已人工授权");
+        await renderProviders();
+      } catch (error) {
+        alert(String(error.code ? error.code + ": " + error.message : error.message || error));
+      }
+    }
+
+    function remoteStatusMessage(result) {
+      if (result.sessionSaved || result.status === "session_authorized") {
+        return "Session 已自动保存。Cookie 已加密保存，不会在页面或日志中显示。";
+      }
+      if (result.reason === "LOGIN_NOT_DETECTED") {
+        return "尚未检测到登录成功。请在远程浏览器里完成账号、验证码/MFA，并停留在账号首页后再检测。";
+      }
+      return result.message || "远程浏览器运行中，请继续在窗口内完成官方登录。";
+    }
+
+    function renderRemoteAuthorizationModal(provider, result) {
+      modal.className = "modal show";
+      modal.innerHTML = '<div class="card remote-card"><h2>' + escapeHtml(provider) + ' 远程可视化登录</h2>' +
+        '<p class="muted">服务器已启动 Playwright 浏览器。你只需要在下面的远程窗口里手动登录；验证码/MFA 也必须由你人工完成，系统不会绕过风控。</p>' +
+        '<div class="warn-box">远程 VNC 临时密码：<strong>' + escapeHtml(result.vncPassword || "无需密码") + '</strong><br/>登录成功后系统会自动检测并加密保存 session；不要在聊天或截图中泄露账号密码。</div>' +
+        '<iframe class="remote-frame" src="' + escapeHtml(result.noVncUrl) + '" title="' + escapeHtml(provider) + ' remote login"></iframe>' +
+        '<p id="remoteAuthMessage" class="muted">' + escapeHtml(remoteStatusMessage(result)) + '</p>' +
+        '<div class="row" style="margin-top:18px">' +
+          '<button onclick="pollRemoteAuthorization(\\'' + provider + '\\', true)">我已完成登录，立即检测保存</button>' +
+          '<button class="secondary" onclick="stopRemoteAuthorization(\\'' + provider + '\\')">停止远程浏览器</button>' +
+          '<button class="secondary" onclick="closeModal()">关闭</button>' +
+        '</div></div>';
+    }
+
+    async function startRemoteAuthorization(provider) {
+      try {
+        const result = await adminFetch("/admin/providers/" + provider + "/remote-auth/start", {
+          method: "POST",
+          body: JSON.stringify({ days: 90 }),
+          timeoutMs: 30000,
+        });
+        renderRemoteAuthorizationModal(provider, result);
+        pollRemoteAuthorization(provider, false);
+        await renderProviders();
+      } catch (error) {
+        alert(String(error.code ? error.code + ": " + error.message : error.message || error));
+      }
+    }
+
+    async function pollRemoteAuthorization(provider, manualCheck) {
+      clearTimeout(remoteAuthTimers[provider]);
+      const messageEl = document.getElementById("remoteAuthMessage");
+      try {
+        const result = await adminFetch("/admin/providers/" + provider + "/remote-auth/status", {
+          timeoutMs: 15000,
+        });
+        if (messageEl) messageEl.textContent = remoteStatusMessage(result);
+        if (result.sessionSaved || result.status === "session_authorized") {
+          await renderProviders();
+          setTimeout(() => { closeModal(); }, 1200);
+          return;
+        }
+        if (manualCheck && messageEl) {
+          messageEl.textContent = remoteStatusMessage(result);
+        }
+        remoteAuthTimers[provider] = setTimeout(() => pollRemoteAuthorization(provider, false), 5000);
+      } catch (error) {
+        if (messageEl) {
+          messageEl.textContent = String(error.code ? error.code + ": " + error.message : error.message || error);
+        } else {
+          alert(String(error.code ? error.code + ": " + error.message : error.message || error));
+        }
+        remoteAuthTimers[provider] = setTimeout(() => pollRemoteAuthorization(provider, false), 8000);
+      }
+    }
+
+    async function stopRemoteAuthorization(provider) {
+      try {
+        clearTimeout(remoteAuthTimers[provider]);
+        delete remoteAuthTimers[provider];
+        await adminFetch("/admin/providers/" + provider + "/remote-auth/stop", {
+          method: "POST",
+          body: "{}",
+        });
+        closeModal();
         await renderProviders();
       } catch (error) {
         alert(String(error.code ? error.code + ": " + error.message : error.message || error));

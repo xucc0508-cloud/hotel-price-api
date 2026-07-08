@@ -125,6 +125,9 @@ test('admin browser pages and protected JSON APIs are available', async () => {
   assert.match(loginPageHtml, /adminFetch/);
   assert.match(loginPageHtml, /startPlaywrightAuthorization/);
   assert.match(loginPageHtml, /savePlaywrightSession/);
+  assert.match(loginPageHtml, /startRemoteAuthorization/);
+  assert.match(loginPageHtml, /pollRemoteAuthorization/);
+  assert.match(loginPageHtml, /远程可视化登录/);
 
   const cachedLoginPageResponse = await fetch(`${baseUrl}/admin/login`, {
     headers: {
@@ -358,7 +361,69 @@ test('IHG real sync source updates public hotel and price APIs', async () => {
     ),
   );
 });
+test('production deploy config exposes noVNC reverse proxy and installs remote browser tools', () => {
+  const deployScript = require('node:fs').readFileSync(
+    require('node:path').join(__dirname, '..', 'deploy.sh'),
+    'utf8',
+  );
+  const nginxConfig = require('node:fs').readFileSync(
+    require('node:path').join(__dirname, '..', 'nginx', 'hotel-price-api.conf'),
+    'utf8',
+  );
 
+  assert.match(deployScript, /x11vnc/);
+  assert.match(deployScript, /novnc/);
+  assert.match(deployScript, /websockify/);
+  assert.match(nginxConfig, /location \/novnc\//);
+  assert.match(nginxConfig, /proxy_set_header Upgrade \$http_upgrade/);
+});
+test('admin remote visual authorization starts a noVNC-backed Playwright task', async () => {
+  process.env.ADMIN_USERNAME = 'remote-auth-admin';
+  process.env.ADMIN_PASSWORD_HASH = `sha256:${crypto
+    .createHash('sha256')
+    .update('remote-auth-password')
+    .digest('hex')}`;
+  process.env.ADMIN_JWT_SECRET = 'remote_auth_jwt_secret_minimum_32_chars';
+  process.env.CREDENTIAL_ENCRYPTION_KEY =
+    'remote_auth_test_encryption_key_minimum_32_chars';
+  process.env.REMOTE_AUTH_TEST_MODE = '1';
+
+  const loginResponse = await fetch(`${baseUrl}/admin/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      username: 'remote-auth-admin',
+      password: 'remote-auth-password',
+    }),
+  });
+  const loginJson = await loginResponse.json();
+  const auth = { Authorization: `Bearer ${loginJson.data.token}` };
+
+  const startResponse = await fetch(`${baseUrl}/admin/providers/IHG/remote-auth/start`, {
+    method: 'POST',
+    headers: { ...auth, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ days: 90 }),
+  });
+  const startJson = await startResponse.json();
+  assert.equal(startResponse.status, 200);
+  assert.equal(startJson.success, true);
+  assert.equal(startJson.data.provider, 'IHG');
+  assert.equal(startJson.data.status, 'remote_authorization_running');
+  assert.equal(startJson.data.days, 90);
+  assert.match(startJson.data.noVncUrl, /^\/novnc\//);
+  assert.match(startJson.data.loginUrl, /^https:\/\//);
+  assert.equal(JSON.stringify(startJson).includes('provider-secret'), false);
+
+  const statusResponse = await fetch(`${baseUrl}/admin/providers/IHG/remote-auth/status`, {
+    headers: auth,
+  });
+  const statusJson = await statusResponse.json();
+  assert.equal(statusResponse.status, 200);
+  assert.equal(statusJson.data.status, 'remote_authorization_running');
+  assert.equal(statusJson.data.sessionSaved, false);
+
+  delete process.env.REMOTE_AUTH_TEST_MODE;
+});
 test('IHG Playwright authorization stores encrypted session for a 90 day sync window', async () => {
   process.env.ADMIN_USERNAME = 'ihg-playwright-admin';
   process.env.ADMIN_PASSWORD_HASH = `sha256:${crypto

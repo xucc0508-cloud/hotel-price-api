@@ -11,6 +11,13 @@ const {
   testSavedProviderSession,
   validateStorageState,
 } = require('./ihg-playwright-provider');
+const {
+  captureRemoteSessionIfReady,
+  getRemoteAuthStatus,
+  markSessionSaved,
+  startRemoteAuth,
+  stopRemoteAuth,
+} = require('./remote-visual-auth');
 
 const PROVIDERS = ['IHG', 'Marriott', 'Hilton', 'Hyatt', 'Accor'];
 const DATA_DIR = path.join(__dirname, '..', 'data');
@@ -420,22 +427,12 @@ function startPlaywrightAuthorization(request, response) {
   response.status(200).json(jsonResponse(authorization));
 }
 
-function savePlaywrightSession(request, response) {
-  const provider = request.params.provider;
-  if (!supportedPlaywrightProvider(provider)) {
-    response
-      .status(400)
-      .json(errorResponse('UNSUPPORTED_PLAYWRIGHT_PROVIDER', `${provider} Playwright authorization is not supported`));
-    return;
-  }
-
-  const storageState = request.body?.storageState;
+function persistPlaywrightSession(provider, storageState, days) {
   const validation = validateStorageState(storageState);
   if (!validation.ok) {
-    response
-      .status(400)
-      .json(errorResponse(validation.code, 'Invalid Playwright storageState'));
-    return;
+    throw Object.assign(new Error('Invalid Playwright storageState'), {
+      code: validation.code,
+    });
   }
 
   const store = readStore();
@@ -444,7 +441,7 @@ function savePlaywrightSession(request, response) {
     usernameMasked: null,
     createdAt: nowIso(),
   };
-  const metadata = buildProviderSessionMetadata(provider, storageState, request.body?.days, nowIso);
+  const metadata = buildProviderSessionMetadata(provider, storageState, days, nowIso);
   store.accounts[provider] = {
     ...account,
     encryptedSession: encryptCredential({
@@ -470,19 +467,159 @@ function savePlaywrightSession(request, response) {
   });
   writeStore(store);
 
-  response.status(200).json(
-    jsonResponse({
+  return {
+    provider,
+    status: metadata.status,
+    sourceType: metadata.sourceType,
+    days: metadata.syncWindowDays,
+    cookieCount: metadata.cookieCount,
+    sessionSaved: true,
+    savedAt: metadata.playwrightSessionSavedAt,
+    message:
+      `${provider} Playwright session saved. Cookies are encrypted and never returned by API.`,
+  };
+}
+
+function savePlaywrightSession(request, response) {
+  const provider = request.params.provider;
+  if (!supportedPlaywrightProvider(provider)) {
+    response
+      .status(400)
+      .json(errorResponse('UNSUPPORTED_PLAYWRIGHT_PROVIDER', `${provider} Playwright authorization is not supported`));
+    return;
+  }
+
+  const storageState = request.body?.storageState;
+  try {
+    response
+      .status(200)
+      .json(jsonResponse(persistPlaywrightSession(provider, storageState, request.body?.days)));
+  } catch (error) {
+    response
+      .status(400)
+      .json(errorResponse(error.code || 'PLAYWRIGHT_SESSION_SAVE_FAILED', error.message));
+  }
+}
+
+async function startRemoteAuthorization(request, response) {
+  const provider = request.params.provider;
+  if (!supportedPlaywrightProvider(provider)) {
+    response
+      .status(400)
+      .json(errorResponse('UNSUPPORTED_PLAYWRIGHT_PROVIDER', `${provider} Playwright authorization is not supported`));
+    return;
+  }
+
+  try {
+    const store = readStore();
+    const account = store.accounts[provider];
+    const authorization = createProviderPlaywrightAuthorization(provider, {
+      account,
+      days: request.body?.days,
+      nowIso,
+      stableId,
+    });
+    const task = await startRemoteAuth(provider, {
+      days: authorization.days,
+      loginUrl: authorization.loginUrl,
+    });
+
+    store.accounts[provider] = {
+      ...(account || {
+        provider,
+        usernameMasked: null,
+        createdAt: nowIso(),
+      }),
+      status: 'remote_authorization_running',
+      sourceType: 'playwright_session',
+      syncWindowDays: authorization.days,
+      remoteAuthTask: {
+        id: task.id,
+        status: task.status,
+        loginUrl: task.loginUrl,
+        noVncUrl: task.noVncUrl,
+        createdAt: task.createdAt,
+      },
+      lastError:
+        `${provider} remote visual authorization started. Complete login, CAPTCHA and MFA manually; session will be saved automatically after login is detected.`,
+      updatedAt: nowIso(),
+    };
+    store.syncLogs.push({
+      id: stableId('log'),
+      jobId: null,
       provider,
-      status: metadata.status,
-      sourceType: metadata.sourceType,
-      days: metadata.syncWindowDays,
-      cookieCount: metadata.cookieCount,
-      sessionSaved: true,
-      savedAt: metadata.playwrightSessionSavedAt,
+      level: 'info',
       message:
-        `${provider} Playwright session saved. Cookies are encrypted and never returned by API.`,
-    }),
-  );
+        `${provider} remote visual Playwright authorization started for a ${authorization.days}-day price sync window.`,
+      createdAt: nowIso(),
+    });
+    writeStore(store);
+
+    response.status(200).json(jsonResponse(task));
+  } catch (error) {
+    response
+      .status(500)
+      .json(errorResponse(error.code || 'REMOTE_AUTH_START_FAILED', error.message || 'Remote visual authorization failed to start'));
+  }
+}
+
+async function remoteAuthorizationStatus(request, response) {
+  const provider = request.params.provider;
+  if (!supportedPlaywrightProvider(provider)) {
+    response
+      .status(400)
+      .json(errorResponse('UNSUPPORTED_PLAYWRIGHT_PROVIDER', `${provider} Playwright authorization is not supported`));
+    return;
+  }
+
+  try {
+    const capture = await captureRemoteSessionIfReady(provider);
+    const status = getRemoteAuthStatus(provider);
+    if (capture.ready) {
+      const saved = persistPlaywrightSession(
+        provider,
+        capture.storageState,
+        request.query?.days || status.days,
+      );
+      markSessionSaved(provider);
+      await stopRemoteAuth(provider);
+      response.status(200).json(
+        jsonResponse({
+          ...saved,
+          status: 'session_authorized',
+          currentUrl: capture.currentUrl,
+        }),
+      );
+      return;
+    }
+
+    response.status(200).json(
+      jsonResponse({
+        ...status,
+        status: capture.status || status.status,
+        sessionSaved: false,
+        reason: capture.reason,
+        cookieCount: capture.cookieCount || 0,
+        currentUrl: capture.currentUrl || null,
+      }),
+    );
+  } catch (error) {
+    response
+      .status(500)
+      .json(errorResponse(error.code || 'REMOTE_AUTH_STATUS_FAILED', error.message || 'Remote authorization status failed'));
+  }
+}
+
+async function stopRemoteAuthorization(request, response) {
+  const provider = request.params.provider;
+  if (!supportedPlaywrightProvider(provider)) {
+    response
+      .status(400)
+      .json(errorResponse('UNSUPPORTED_PLAYWRIGHT_PROVIDER', `${provider} Playwright authorization is not supported`));
+    return;
+  }
+
+  response.status(200).json(jsonResponse(await stopRemoteAuth(provider)));
 }
 
 function createSyncJob(provider, type) {
@@ -764,6 +901,24 @@ function registerAdminRoutes(app) {
     '/admin/providers/:provider/playwright/session',
     requireAdmin,
     savePlaywrightSession,
+  );
+
+  app.post(
+    '/admin/providers/:provider/remote-auth/start',
+    requireAdmin,
+    startRemoteAuthorization,
+  );
+
+  app.get(
+    '/admin/providers/:provider/remote-auth/status',
+    requireAdmin,
+    remoteAuthorizationStatus,
+  );
+
+  app.post(
+    '/admin/providers/:provider/remote-auth/stop',
+    requireAdmin,
+    stopRemoteAuthorization,
   );
 
   app.post('/admin/providers/:provider/test', requireAdmin, async (request, response) => {
