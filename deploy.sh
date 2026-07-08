@@ -94,7 +94,7 @@ configure_nginx_ip_proxy() {
   fi
 
   log "Current port 80/443 listeners..."
-  ss -tlnp 2>/dev/null | grep -E ':(80|443)\\s' || true
+  ss -tlnp 2>/dev/null | grep -E ':(80|443)[[:space:]]' || true
 
   log "Checking Nginx local proxy http://127.0.0.1/health..."
   curl --fail --silent --show-error --max-time 5 http://127.0.0.1/health
@@ -103,6 +103,11 @@ configure_nginx_ip_proxy() {
   log "Checking Nginx public-IP path from server network..."
   curl --silent --show-error --max-time 5 http://82.156.240.45/health || true
   echo
+
+  log "Recent Nginx access log entries..."
+  sudo -n tail -n 20 /var/log/nginx/hotel-price-api.access.log 2>/dev/null || true
+  log "Recent Nginx error log entries..."
+  sudo -n tail -n 20 /var/log/nginx/hotel-price-api.error.log 2>/dev/null || true
 }
 
 configure_nginx_ip_proxy
