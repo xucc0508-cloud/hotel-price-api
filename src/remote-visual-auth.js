@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 
@@ -7,6 +8,8 @@ const DATA_DIR = path.join(__dirname, '..', 'data', 'remote-auth');
 const DEFAULT_DISPLAY = process.env.REMOTE_AUTH_DISPLAY || ':99';
 const DEFAULT_VNC_PORT = Number(process.env.REMOTE_AUTH_VNC_PORT || 5901);
 const DEFAULT_NOVNC_PORT = Number(process.env.REMOTE_AUTH_NOVNC_PORT || 6080);
+const DEFAULT_TTL_MS = Number(process.env.REMOTE_AUTH_TTL_MS || 15 * 60 * 1000);
+const MIN_FREE_MEMORY_MB = Number(process.env.REMOTE_AUTH_MIN_FREE_MEMORY_MB || 700);
 const NOVNC_WEB_ROOT = process.env.REMOTE_AUTH_NOVNC_WEB || '/usr/share/novnc';
 const PROVIDER_DOMAINS = {
   IHG: ['ihg.com'],
@@ -29,6 +32,35 @@ function noVncUrl() {
   return '/novnc/vnc.html?autoconnect=1&resize=scale&path=novnc/websockify';
 }
 
+function availableMemoryMb() {
+  try {
+    if (process.platform === 'linux' && fs.existsSync('/proc/meminfo')) {
+      const meminfo = fs.readFileSync('/proc/meminfo', 'utf8');
+      const match = meminfo.match(/^MemAvailable:\s+(\d+)\s+kB/im);
+      if (match) return Math.floor(Number(match[1]) / 1024);
+    }
+  } catch (_error) {
+    // Fall back to os.freemem below.
+  }
+  return Math.floor(os.freemem() / 1024 / 1024);
+}
+
+function assertEnoughMemoryForRemoteAuth() {
+  const freeMb = availableMemoryMb();
+  if (freeMb < MIN_FREE_MEMORY_MB) {
+    throw Object.assign(
+      new Error(
+        `Remote visual authorization requires at least ${MIN_FREE_MEMORY_MB}MB available memory; current available memory is ${freeMb}MB.`,
+      ),
+      {
+        code: 'REMOTE_AUTH_INSUFFICIENT_MEMORY',
+        freeMemoryMb: freeMb,
+        minFreeMemoryMb: MIN_FREE_MEMORY_MB,
+      },
+    );
+  }
+}
+
 function publicTask(task) {
   return {
     id: task.id,
@@ -40,6 +72,7 @@ function publicTask(task) {
     vncPassword: task.vncPassword,
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
+    expiresAt: task.expiresAt,
     sessionSaved: Boolean(task.sessionSaved),
     browserStarted: Boolean(task.browserStarted),
     message: task.message,
@@ -100,6 +133,10 @@ async function stopRemoteAuth(provider) {
     };
   }
 
+  if (task.ttlTimer) {
+    clearTimeout(task.ttlTimer);
+    task.ttlTimer = null;
+  }
   if (task.browser) {
     await task.browser.close().catch(() => {});
   }
@@ -138,6 +175,7 @@ async function startRemoteAuth(provider, options) {
     return publicTask(createTestTask(provider, options));
   }
 
+  assertEnoughMemoryForRemoteAuth();
   fs.mkdirSync(DATA_DIR, { recursive: true });
 
   const task = {
@@ -150,12 +188,15 @@ async function startRemoteAuth(provider, options) {
     vncPassword: crypto.randomBytes(9).toString('base64url'),
     createdAt: nowIso(),
     updatedAt: nowIso(),
+    expiresAt: new Date(Date.now() + DEFAULT_TTL_MS).toISOString(),
     sessionSaved: false,
     browserStarted: false,
     message:
       'Starting server-side Playwright browser. Complete CAPTCHA/MFA manually in the remote view.',
     children: [],
   };
+  task.ttlTimer = setTimeout(() => stopRemoteAuth(provider).catch(() => {}), DEFAULT_TTL_MS);
+  if (task.ttlTimer.unref) task.ttlTimer.unref();
   activeTasks.set(provider, task);
 
   try {

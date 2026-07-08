@@ -18,6 +18,18 @@ const app = require('../src/app');
 let server;
 let baseUrl;
 
+function isoDate(offsetDays = 0) {
+  const shanghaiToday = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+  const date = new Date(`${shanghaiToday}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + offsetDays);
+  return date.toISOString().slice(0, 10);
+}
+
 before(async () => {
   await new Promise((resolve) => {
     server = app.listen(0, '127.0.0.1', resolve);
@@ -257,6 +269,8 @@ test('IHG real sync source updates public hotel and price APIs', async () => {
     .update('ihg-sync-password')
     .digest('hex')}`;
   process.env.ADMIN_JWT_SECRET = 'ihg_sync_jwt_secret_minimum_32_chars';
+  const checkinDate = isoDate(0);
+  const checkoutDate = isoDate(1);
 
   const ihgSourceFile = path.join(
     os.tmpdir(),
@@ -281,8 +295,8 @@ test('IHG real sync source updates public hotel and price APIs', async () => {
           providerHotelId: 'PEKHB',
           hotelName: 'IHG 北京真实测试酒店',
           city: '北京',
-          checkinDate: '2026-07-08',
-          checkoutDate: '2026-07-09',
+          checkinDate,
+          checkoutDate,
           cashPrice: 688,
           pointsPrice: 20000,
           currency: 'CNY',
@@ -338,7 +352,7 @@ test('IHG real sync source updates public hotel and price APIs', async () => {
   );
 
   const priceResponse = await fetch(
-    `${baseUrl}/price?hotelId=${encodeURIComponent(syncedHotel.id)}&date=2026-07-08`,
+    `${baseUrl}/price?hotelId=${encodeURIComponent(syncedHotel.id)}&date=${checkinDate}`,
   );
   const priceJson = await priceResponse.json();
   assert.equal(priceJson.cashPrice, 688);
@@ -346,13 +360,13 @@ test('IHG real sync source updates public hotel and price APIs', async () => {
   assert.equal(priceJson.sourceType, 'official');
 
   const rankResponse = await fetch(
-    `${baseUrl}/rank?provider=IHG&city=${encodeURIComponent('北京')}&date=2026-07-08`,
+    `${baseUrl}/rank?provider=IHG&city=${encodeURIComponent('北京')}&date=${checkinDate}`,
   );
   const rankJson = await rankResponse.json();
   assert.ok(rankJson.some((hotel) => hotel.hotelName === 'IHG 北京真实测试酒店'));
 
   const compareResponse = await fetch(
-    `${baseUrl}/compare/rank?provider=IHG&city=${encodeURIComponent('北京')}&date=2026-07-08`,
+    `${baseUrl}/compare/rank?provider=IHG&city=${encodeURIComponent('北京')}&date=${checkinDate}`,
   );
   const compareJson = await compareResponse.json();
   assert.ok(
@@ -376,6 +390,26 @@ test('production deploy config exposes noVNC reverse proxy and installs remote b
   assert.match(deployScript, /websockify/);
   assert.match(nginxConfig, /location \/novnc\//);
   assert.match(nginxConfig, /proxy_set_header Upgrade \$http_upgrade/);
+});
+
+test('remote visual authorization has server safety guards', () => {
+  const deployScript = require('node:fs').readFileSync(
+    require('node:path').join(__dirname, '..', 'deploy.sh'),
+    'utf8',
+  );
+  const remoteAuthSource = require('node:fs').readFileSync(
+    require('node:path').join(__dirname, '..', 'src', 'remote-visual-auth.js'),
+    'utf8',
+  );
+
+  assert.match(deployScript, /cleanup_remote_browser_processes/);
+  assert.match(deployScript, /pkill[\s\S]+x11vnc/);
+  assert.match(deployScript, /pkill[\s\S]+websockify/);
+  assert.match(deployScript, /pkill[\s\S]+Xvfb/);
+  assert.match(remoteAuthSource, /REMOTE_AUTH_TTL_MS/);
+  assert.match(remoteAuthSource, /setTimeout\(\(\) => stopRemoteAuth/);
+  assert.match(remoteAuthSource, /REMOTE_AUTH_MIN_FREE_MEMORY_MB/);
+  assert.match(remoteAuthSource, /REMOTE_AUTH_INSUFFICIENT_MEMORY/);
 });
 test('admin remote visual authorization starts a noVNC-backed Playwright task', async () => {
   process.env.ADMIN_USERNAME = 'remote-auth-admin';
@@ -615,17 +649,13 @@ test('IHG Playwright session sync writes 90 days of real source prices', async (
     `hotel-price-api-ihg-source-90-${process.pid}.json`,
   );
   const prices = Array.from({ length: 90 }, (_item, index) => {
-    const date = new Date('2026-07-08T00:00:00.000Z');
-    date.setUTCDate(date.getUTCDate() + index);
-    const checkinDate = date.toISOString().slice(0, 10);
-    const checkout = new Date(date);
-    checkout.setUTCDate(checkout.getUTCDate() + 1);
+    const checkinDate = isoDate(index);
     return {
       providerHotelId: 'PEK90',
       hotelName: 'IHG 90 Day Session Hotel',
       city: 'Beijing',
       checkinDate,
-      checkoutDate: checkout.toISOString().slice(0, 10),
+      checkoutDate: isoDate(index + 1),
       cashPrice: 600 + index,
       pointsPrice: 20000,
       currency: 'CNY',
@@ -688,7 +718,7 @@ test('IHG Playwright session sync writes 90 days of real source prices', async (
   assert.equal(syncJson.data.totalPrices, 90);
 
   const priceResponse = await fetch(
-    `${baseUrl}/price?hotelId=IHG:PEK90&date=2026-10-05`,
+    `${baseUrl}/price?hotelId=IHG:PEK90&date=${isoDate(89)}`,
   );
   const priceJson = await priceResponse.json();
   assert.equal(priceJson.cashPrice, 689);

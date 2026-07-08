@@ -78,6 +78,20 @@ install_remote_browser_tools() {
 
 install_remote_browser_tools
 
+cleanup_remote_browser_processes() {
+  if ! command -v pkill >/dev/null 2>&1; then
+    log "WARNING: pkill is unavailable; skipping stale remote browser cleanup."
+    return
+  fi
+
+  log "Cleaning up stale remote visual browser processes..."
+  pkill -f "x11vnc.*-rfbport 5901" || true
+  pkill -f "websockify.*127\\.0\\.0\\.1:6080" || true
+  pkill -f "Xvfb :99" || true
+}
+
+cleanup_remote_browser_processes
+
 log "Loading environment variables from .env..."
 set -a
 [ -f .env ] && . ./.env
