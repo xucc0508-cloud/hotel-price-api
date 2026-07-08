@@ -86,8 +86,22 @@ configure_nginx_ip_proxy() {
   sudo -n nginx -t
   sudo -n systemctl reload nginx
 
+  if command -v ufw >/dev/null 2>&1; then
+    log "Ensuring local firewall allows HTTP/HTTPS..."
+    sudo -n ufw allow 80/tcp >/dev/null || true
+    sudo -n ufw allow 443/tcp >/dev/null || true
+    sudo -n ufw status || true
+  fi
+
+  log "Current port 80/443 listeners..."
+  ss -tlnp 2>/dev/null | grep -E ':(80|443)\\s' || true
+
   log "Checking Nginx local proxy http://127.0.0.1/health..."
   curl --fail --silent --show-error --max-time 5 http://127.0.0.1/health
+  echo
+
+  log "Checking Nginx public-IP path from server network..."
+  curl --silent --show-error --max-time 5 http://82.156.240.45/health || true
   echo
 }
 
