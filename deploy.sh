@@ -61,6 +61,38 @@ pm2 startOrReload ecosystem.config.js --env production --update-env
 pm2 describe "${APP_NAME}" >/dev/null
 pm2 save
 
+configure_nginx_ip_proxy() {
+  if [[ ! -f nginx/hotel-price-api.conf ]]; then
+    log "WARNING: nginx/hotel-price-api.conf is missing; skipping Nginx IP proxy setup."
+    return
+  fi
+
+  if ! command -v nginx >/dev/null 2>&1; then
+    log "WARNING: nginx is not installed; skipping Nginx IP proxy setup."
+    return
+  fi
+
+  if ! command -v sudo >/dev/null 2>&1; then
+    fail "sudo is required to install the Nginx IP proxy config."
+  fi
+
+  log "Installing Nginx IP proxy config for port 80..."
+  sudo -n cp nginx/hotel-price-api.conf /etc/nginx/sites-available/hotel-price-api
+  sudo -n ln -sfn /etc/nginx/sites-available/hotel-price-api \
+    /etc/nginx/sites-enabled/hotel-price-api
+  if [[ -e /etc/nginx/sites-enabled/default ]]; then
+    sudo -n rm -f /etc/nginx/sites-enabled/default
+  fi
+  sudo -n nginx -t
+  sudo -n systemctl reload nginx
+
+  log "Checking Nginx local proxy http://127.0.0.1/health..."
+  curl --fail --silent --show-error --max-time 5 http://127.0.0.1/health
+  echo
+}
+
+configure_nginx_ip_proxy
+
 log "Checking ${HEALTH_URL}..."
 for attempt in {1..15}; do
   if health_response="$(curl --fail --silent --show-error --max-time 5 \
