@@ -473,10 +473,7 @@ function adminPageHtml() {
         alert("远程 VNC 地址为空，请重新点击远程可视化登录。");
         return;
       }
-      const opened = window.open(url, "_blank", "noopener,noreferrer");
-      if (!opened) {
-        location.href = url;
-      }
+      location.href = url;
     }
 
     function renderRemoteAuthorizationModal(provider, result) {
@@ -484,10 +481,10 @@ function adminPageHtml() {
       modal.innerHTML = '<div class="card remote-card"><h2>' + escapeHtml(provider) + ' 远程可视化登录</h2>' +
         '<p class="muted">服务器已启动 Playwright 浏览器。你只需要在下面的远程窗口里手动登录；验证码/MFA 也必须由你人工完成，系统不会绕过风控。</p>' +
         '<div class="warn-box">远程 VNC 临时密码：<strong>' + escapeHtml(result.vncPassword || "无需密码") + '</strong><br/>登录成功后系统会自动检测并加密保存 session；不要在聊天或截图中泄露账号密码。</div>' +
-        '<div class="warn-box">为避免手机内置浏览器的 iframe/WebSocket 断开，VNC 将在独立窗口打开。打开后输入上方 8 位临时密码，再点击 Connect/连接；不要在 VNC 密码框里输入管理员密码或酒店账号密码。</div>' +
+        '<div class="warn-box">为避免手机内置浏览器拦截新窗口，点击后将从当前页面进入 VNC。输入上方 8 位临时密码，再点击 Connect/连接；登录完成后返回后台点“我已完成登录”。</div>' +
         '<div class="row" style="margin-top:16px">' +
-          '<button onclick="openRemoteAuthorizationWindow(this.dataset.url)" data-url="' + escapeHtml(result.noVncUrl) + '">打开独立 VNC 登录窗口</button>' +
-          '<a class="button-link secondary" href="' + escapeHtml(result.noVncUrl) + '" target="_blank" rel="noopener noreferrer">按钮无效时点这里</a>' +
+          '<button onclick="openRemoteAuthorizationWindow(this.dataset.url)" data-url="' + escapeHtml(result.noVncUrl) + '">当前页面进入 VNC</button>' +
+          '<a class="button-link secondary" href="' + escapeHtml(result.noVncUrl) + '">按钮无效时点这里</a>' +
         '</div>' +
         '<p id="remoteAuthMessage" class="muted">' + escapeHtml(remoteStatusMessage(result)) + '</p>' +
         '<div class="row" style="margin-top:18px">' +
