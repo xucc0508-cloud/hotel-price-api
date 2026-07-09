@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const fs = require('fs');
+const net = require('net');
 const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
@@ -75,6 +76,8 @@ function publicTask(task) {
     expiresAt: task.expiresAt,
     sessionSaved: Boolean(task.sessionSaved),
     browserStarted: Boolean(task.browserStarted),
+    vncReady: Boolean(task.vncReady),
+    novncReady: Boolean(task.novncReady),
     message: task.message,
   };
 }
@@ -92,6 +95,8 @@ function createTestTask(provider, options) {
     updatedAt: nowIso(),
     sessionSaved: false,
     browserStarted: true,
+    vncReady: true,
+    novncReady: true,
     message:
       'Remote visual authorization is running in test mode. No real browser was started.',
     testMode: true,
@@ -106,11 +111,74 @@ function spawnManaged(command, args, options = {}) {
     windowsHide: true,
     ...options,
   });
+  child.processName = command;
   child.on('error', (error) => {
     child.spawnError = error;
   });
+  child.on('exit', (code, signal) => {
+    child.exitCodeValue = code;
+    child.exitSignalValue = signal;
+  });
   child.unref();
   return child;
+}
+
+function childFailure(child) {
+  if (!child) return null;
+  if (child.spawnError) return child.spawnError;
+  if (child.exitCodeValue !== undefined || child.exitSignalValue !== undefined) {
+    return new Error(
+      `${child.processName || 'remote auth process'} exited early with code ${child.exitCodeValue ?? 'null'} and signal ${child.exitSignalValue ?? 'null'}`,
+    );
+  }
+  return null;
+}
+
+function tcpConnects(port, host = '127.0.0.1') {
+  return new Promise((resolve) => {
+    const socket = net.createConnection({ host, port });
+    const finish = (ok) => {
+      socket.removeAllListeners();
+      socket.destroy();
+      resolve(ok);
+    };
+    socket.setTimeout(250);
+    socket.once('connect', () => finish(true));
+    socket.once('timeout', () => finish(false));
+    socket.once('error', () => finish(false));
+  });
+}
+
+async function waitForTcpPort({ port, code, label, children = [], timeoutMs = 10000 }) {
+  const deadline = Date.now() + timeoutMs;
+  let lastFailure = null;
+
+  while (Date.now() < deadline) {
+    for (const child of children) {
+      const failure = childFailure(child);
+      if (failure) {
+        throw Object.assign(
+          new Error(`${label} failed before it became reachable: ${failure.message}`),
+          { code },
+        );
+      }
+    }
+
+    if (await tcpConnects(port)) return true;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+
+  for (const child of children) {
+    lastFailure = childFailure(child) || lastFailure;
+  }
+  throw Object.assign(
+    new Error(
+      lastFailure
+        ? `${label} did not become reachable on port ${port}: ${lastFailure.message}`
+        : `${label} did not become reachable on port ${port}.`,
+    ),
+    { code },
+  );
 }
 
 function killChild(child) {
@@ -191,6 +259,8 @@ async function startRemoteAuth(provider, options) {
     expiresAt: new Date(Date.now() + DEFAULT_TTL_MS).toISOString(),
     sessionSaved: false,
     browserStarted: false,
+    vncReady: false,
+    novncReady: false,
     message:
       'Starting server-side Playwright browser. Complete CAPTCHA/MFA manually in the remote view.',
     children: [],
@@ -201,45 +271,59 @@ async function startRemoteAuth(provider, options) {
 
   try {
     const env = { ...process.env, DISPLAY: DEFAULT_DISPLAY };
-    task.children.push(
-      spawnManaged('Xvfb', [DEFAULT_DISPLAY, '-screen', '0', '1280x900x24', '-ac', '-nolisten', 'tcp'], {
+    const xvfb = spawnManaged(
+      'Xvfb',
+      [DEFAULT_DISPLAY, '-screen', '0', '1280x900x24', '-ac', '-nolisten', 'tcp'],
+      {
         env,
-      }),
+      },
     );
+    task.children.push(xvfb);
     await new Promise((resolve) => setTimeout(resolve, 700));
 
-    task.children.push(
-      spawnManaged(
-        'x11vnc',
-        [
-          '-display',
-          DEFAULT_DISPLAY,
-          '-localhost',
-          '-forever',
-          '-shared',
-          '-noxdamage',
-          '-rfbport',
-          String(DEFAULT_VNC_PORT),
-          '-passwd',
-          task.vncPassword,
-        ],
-        { env },
-      ),
+    const x11vnc = spawnManaged(
+      'x11vnc',
+      [
+        '-display',
+        DEFAULT_DISPLAY,
+        '-localhost',
+        '-forever',
+        '-shared',
+        '-noxdamage',
+        '-rfbport',
+        String(DEFAULT_VNC_PORT),
+        '-passwd',
+        task.vncPassword,
+      ],
+      { env },
     );
+    task.children.push(x11vnc);
+    await waitForTcpPort({
+      port: DEFAULT_VNC_PORT,
+      code: 'REMOTE_AUTH_VNC_NOT_READY',
+      label: 'VNC server',
+      children: [xvfb, x11vnc],
+    });
+    task.vncReady = true;
 
-    task.children.push(
-      spawnManaged(
-        'websockify',
-        [
-          `--web=${NOVNC_WEB_ROOT}`,
-          `127.0.0.1:${DEFAULT_NOVNC_PORT}`,
-          `127.0.0.1:${DEFAULT_VNC_PORT}`,
-        ],
-        { env },
-      ),
+    const websockify = spawnManaged(
+      'websockify',
+      [
+        `--web=${NOVNC_WEB_ROOT}`,
+        `127.0.0.1:${DEFAULT_NOVNC_PORT}`,
+        `127.0.0.1:${DEFAULT_VNC_PORT}`,
+      ],
+      { env },
     );
+    task.children.push(websockify);
+    await waitForTcpPort({
+      port: DEFAULT_NOVNC_PORT,
+      code: 'REMOTE_AUTH_NOVNC_NOT_READY',
+      label: 'noVNC websockify server',
+      children: [xvfb, x11vnc, websockify],
+    });
+    task.novncReady = true;
 
-    await new Promise((resolve) => setTimeout(resolve, 900));
     const { chromium } = require('playwright');
     const userDataDir = path.join(DATA_DIR, task.id);
     const context = await chromium.launchPersistentContext(userDataDir, {

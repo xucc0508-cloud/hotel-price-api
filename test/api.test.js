@@ -410,6 +410,10 @@ test('remote visual authorization has server safety guards', () => {
   assert.match(remoteAuthSource, /setTimeout\(\(\) => stopRemoteAuth/);
   assert.match(remoteAuthSource, /REMOTE_AUTH_MIN_FREE_MEMORY_MB/);
   assert.match(remoteAuthSource, /REMOTE_AUTH_INSUFFICIENT_MEMORY/);
+  assert.match(remoteAuthSource, /waitForTcpPort/);
+  assert.match(remoteAuthSource, /REMOTE_AUTH_VNC_NOT_READY/);
+  assert.match(remoteAuthSource, /REMOTE_AUTH_NOVNC_NOT_READY/);
+  assert.match(remoteAuthSource, /novncReady/);
 });
 test('admin remote visual authorization starts a noVNC-backed Playwright task', async () => {
   process.env.ADMIN_USERNAME = 'remote-auth-admin';
