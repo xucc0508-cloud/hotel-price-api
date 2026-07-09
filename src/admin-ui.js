@@ -460,12 +460,21 @@ function adminPageHtml() {
 
     function remoteStatusMessage(result) {
       if (result.sessionSaved || result.status === "session_authorized") {
-        return "Session 已自动保存。Cookie 已加密保存，不会在页面或日志中显示。";
+        return "Session 已保存，无需重新登录。你可以直接同步90天价格；Cookie 已加密保存，不会在页面或日志中显示。";
       }
       if (result.reason === "LOGIN_NOT_DETECTED") {
         return "尚未检测到登录成功。请在远程浏览器里完成账号、验证码/MFA，并停留在账号首页后再检测。";
       }
       return result.message || "远程浏览器运行中，请继续在窗口内完成官方登录。";
+    }
+
+    function remoteSavedActions(provider) {
+      return '<div id="remoteSavedActions" class="warn-box" style="display:none">' +
+        '<strong>Session 已保存，无需重新登录。</strong><br/>下一步请直接同步90天价格，系统会用已保存 session 查询真实酒店与价格。' +
+        '<div class="row" style="margin-top:12px">' +
+          '<button onclick="syncProvider(\\'' + provider + '\\')">同步90天价格</button>' +
+          '<button class="secondary" onclick="closeModal(); renderProviders();">回到 Providers</button>' +
+        '</div></div>';
     }
 
     function openRemoteAuthorizationWindow(url) {
@@ -486,6 +495,7 @@ function adminPageHtml() {
           '<button onclick="openRemoteAuthorizationWindow(this.dataset.url)" data-url="' + escapeHtml(result.noVncUrl) + '">当前页面进入 VNC</button>' +
           '<a class="button-link secondary" href="' + escapeHtml(result.noVncUrl) + '">按钮无效时点这里</a>' +
         '</div>' +
+        remoteSavedActions(provider) +
         '<p id="remoteAuthMessage" class="muted">' + escapeHtml(remoteStatusMessage(result)) + '</p>' +
         '<div class="row" style="margin-top:18px">' +
           '<button onclick="pollRemoteAuthorization(\\'' + provider + '\\', true)">我已完成登录，立即检测保存</button>' +
@@ -512,14 +522,15 @@ function adminPageHtml() {
     async function pollRemoteAuthorization(provider, manualCheck) {
       clearTimeout(remoteAuthTimers[provider]);
       const messageEl = document.getElementById("remoteAuthMessage");
+      const savedActionsEl = document.getElementById("remoteSavedActions");
       try {
         const result = await adminFetch("/admin/providers/" + provider + "/remote-auth/status", {
           timeoutMs: 15000,
         });
         if (messageEl) messageEl.textContent = remoteStatusMessage(result);
         if (result.sessionSaved || result.status === "session_authorized") {
+          if (savedActionsEl) savedActionsEl.style.display = "block";
           await renderProviders();
-          setTimeout(() => { closeModal(); }, 1200);
           return;
         }
         if (manualCheck && messageEl) {

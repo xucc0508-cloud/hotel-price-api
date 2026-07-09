@@ -143,6 +143,8 @@ test('admin browser pages and protected JSON APIs are available', async () => {
   assert.match(loginPageHtml, /location\.href = url/);
   assert.doesNotMatch(loginPageHtml, /window\.open/);
   assert.match(loginPageHtml, /当前页面进入 VNC/);
+  assert.match(loginPageHtml, /无需重新登录/);
+  assert.doesNotMatch(loginPageHtml, /setTimeout\(\(\) => \{ closeModal\(\); \}, 1200\)/);
   assert.doesNotMatch(loginPageHtml, /<iframe class="remote-frame"/);
   assert.match(loginPageHtml, /远程可视化登录/);
 
