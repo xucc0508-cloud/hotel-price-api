@@ -12,6 +12,7 @@ const DEFAULT_NOVNC_PORT = Number(process.env.REMOTE_AUTH_NOVNC_PORT || 6080);
 const DEFAULT_TTL_MS = Number(process.env.REMOTE_AUTH_TTL_MS || 15 * 60 * 1000);
 const MIN_FREE_MEMORY_MB = Number(process.env.REMOTE_AUTH_MIN_FREE_MEMORY_MB || 700);
 const NOVNC_WEB_ROOT = process.env.REMOTE_AUTH_NOVNC_WEB || '/usr/share/novnc';
+const VNC_PASSWORD_LENGTH = 8;
 const PROVIDER_DOMAINS = {
   IHG: ['ihg.com'],
   Marriott: ['marriott.com'],
@@ -29,8 +30,12 @@ function makeTaskId(provider) {
     .toString('hex')}`;
 }
 
+function createVncPassword() {
+  return crypto.randomBytes(16).toString('base64url').slice(0, VNC_PASSWORD_LENGTH);
+}
+
 function noVncUrl() {
-  return '/novnc/vnc.html?autoconnect=1&resize=scale&path=novnc/websockify';
+  return '/novnc/vnc.html?autoconnect=0&resize=scale&path=novnc/websockify';
 }
 
 function availableMemoryMb() {
@@ -90,7 +95,7 @@ function createTestTask(provider, options) {
     days: options.days,
     loginUrl: options.loginUrl,
     noVncUrl: noVncUrl(),
-    vncPassword: 'test-mode-password',
+    vncPassword: 'testpass',
     createdAt: nowIso(),
     updatedAt: nowIso(),
     sessionSaved: false,
@@ -253,7 +258,7 @@ async function startRemoteAuth(provider, options) {
     days: options.days,
     loginUrl: options.loginUrl,
     noVncUrl: noVncUrl(),
-    vncPassword: crypto.randomBytes(9).toString('base64url'),
+    vncPassword: createVncPassword(),
     createdAt: nowIso(),
     updatedAt: nowIso(),
     expiresAt: new Date(Date.now() + DEFAULT_TTL_MS).toISOString(),
@@ -341,7 +346,7 @@ async function startRemoteAuth(provider, options) {
     task.browserStarted = true;
     task.updatedAt = nowIso();
     task.message =
-      'Remote browser is ready. Finish official login, CAPTCHA and MFA manually; the server will save the session after login is detected.';
+      'Remote browser is ready. Enter the temporary VNC password, click Connect, then finish official login, CAPTCHA and MFA manually.';
     return publicTask(task);
   } catch (error) {
     task.status = 'remote_authorization_failed';

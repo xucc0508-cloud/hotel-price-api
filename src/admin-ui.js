@@ -468,6 +468,7 @@ function adminPageHtml() {
       modal.innerHTML = '<div class="card remote-card"><h2>' + escapeHtml(provider) + ' 远程可视化登录</h2>' +
         '<p class="muted">服务器已启动 Playwright 浏览器。你只需要在下面的远程窗口里手动登录；验证码/MFA 也必须由你人工完成，系统不会绕过风控。</p>' +
         '<div class="warn-box">远程 VNC 临时密码：<strong>' + escapeHtml(result.vncPassword || "无需密码") + '</strong><br/>登录成功后系统会自动检测并加密保存 session；不要在聊天或截图中泄露账号密码。</div>' +
+        '<div class="warn-box">VNC 页面现在不会自动连接。请先输入上方 8 位临时密码，再点击 Connect/连接；不要在 VNC 密码框里输入管理员密码或酒店账号密码。</div>' +
         '<iframe class="remote-frame" src="' + escapeHtml(result.noVncUrl) + '" title="' + escapeHtml(provider) + ' remote login"></iframe>' +
         '<p id="remoteAuthMessage" class="muted">' + escapeHtml(remoteStatusMessage(result)) + '</p>' +
         '<div class="row" style="margin-top:18px">' +
