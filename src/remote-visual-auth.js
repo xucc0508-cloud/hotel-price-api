@@ -35,7 +35,7 @@ function createVncPassword() {
 }
 
 function noVncUrl() {
-  return '/novnc/vnc.html?autoconnect=0&resize=scale&path=novnc/websockify';
+  return '/novnc/vnc.html?autoconnect=0&resize=scale&reconnect=1&reconnect_delay=2000&path=novnc/websockify';
 }
 
 function availableMemoryMb() {
@@ -83,6 +83,7 @@ function publicTask(task) {
     browserStarted: Boolean(task.browserStarted),
     vncReady: Boolean(task.vncReady),
     novncReady: Boolean(task.novncReady),
+    failureCode: task.failureCode || null,
     message: task.message,
   };
 }
@@ -136,6 +137,33 @@ function childFailure(child) {
       `${child.processName || 'remote auth process'} exited early with code ${child.exitCodeValue ?? 'null'} and signal ${child.exitSignalValue ?? 'null'}`,
     );
   }
+  return null;
+}
+
+function refreshRemoteTaskHealth(task) {
+  if (
+    !task ||
+    task.testMode ||
+    task.sessionSaved ||
+    task.status === 'session_authorized' ||
+    task.status === 'remote_authorization_failed' ||
+    task.status === 'remote_authorization_stopped'
+  ) {
+    return null;
+  }
+
+  for (const child of task.children || []) {
+    const failure = childFailure(child);
+    if (failure) {
+      task.status = 'remote_authorization_failed';
+      task.failureCode = 'REMOTE_AUTH_PROCESS_EXITED';
+      task.updatedAt = nowIso();
+      task.message = `Remote visual authorization process exited: ${failure.message}`;
+      for (const sibling of task.children || []) killChild(sibling);
+      return failure;
+    }
+  }
+
   return null;
 }
 
@@ -240,8 +268,12 @@ process.once('SIGTERM', () => {
 
 async function startRemoteAuth(provider, options) {
   const existing = activeTasks.get(provider);
-  if (existing && existing.status === 'remote_authorization_running') {
-    return publicTask(existing);
+  if (existing) {
+    refreshRemoteTaskHealth(existing);
+    if (existing.status === 'remote_authorization_running') {
+      return publicTask(existing);
+    }
+    await stopRemoteAuth(provider);
   }
 
   if (process.env.REMOTE_AUTH_TEST_MODE === '1') {
@@ -370,6 +402,7 @@ function getRemoteAuthStatus(provider) {
       message: 'No remote authorization task is running.',
     };
   }
+  refreshRemoteTaskHealth(task);
   return publicTask(task);
 }
 
@@ -424,6 +457,16 @@ async function captureRemoteSessionIfReady(provider) {
       provider,
       status: 'not_started',
       reason: 'No remote authorization task is running.',
+    };
+  }
+  refreshRemoteTaskHealth(task);
+  if (task.status === 'remote_authorization_failed') {
+    return {
+      ready: false,
+      provider,
+      status: task.status,
+      reason: task.message,
+      failureCode: task.failureCode || 'REMOTE_AUTH_PROCESS_EXITED',
     };
   }
   if (task.testMode) {

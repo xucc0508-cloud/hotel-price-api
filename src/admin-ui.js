@@ -75,6 +75,18 @@ function adminPageHtml() {
     }
     button.secondary { background: #edf5ff; color: var(--blue-dark); }
     button:disabled { opacity: .55; cursor: not-allowed; }
+    .button-link {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 12px;
+      padding: 10px 14px;
+      background: var(--blue);
+      color: #fff;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .button-link.secondary { background: #edf5ff; color: var(--blue-dark); }
     .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
     .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
     .provider-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
@@ -129,13 +141,6 @@ function adminPageHtml() {
     .modal.show { display: flex; }
     .modal .card { width: min(520px, 100%); margin: 0; }
     .modal .remote-card { width: min(1120px, 100%); max-height: 94vh; overflow: auto; }
-    .remote-frame {
-      width: 100%;
-      height: min(680px, 68vh);
-      border: 1px solid var(--line);
-      border-radius: 16px;
-      background: #071b3a;
-    }
     @media (max-width: 900px) {
       .shell { grid-template-columns: 1fr; }
       .grid, .provider-grid { grid-template-columns: 1fr; }
@@ -463,13 +468,27 @@ function adminPageHtml() {
       return result.message || "远程浏览器运行中，请继续在窗口内完成官方登录。";
     }
 
+    function openRemoteAuthorizationWindow(url) {
+      if (!url) {
+        alert("远程 VNC 地址为空，请重新点击远程可视化登录。");
+        return;
+      }
+      const opened = window.open(url, "_blank", "noopener,noreferrer");
+      if (!opened) {
+        location.href = url;
+      }
+    }
+
     function renderRemoteAuthorizationModal(provider, result) {
       modal.className = "modal show";
       modal.innerHTML = '<div class="card remote-card"><h2>' + escapeHtml(provider) + ' 远程可视化登录</h2>' +
         '<p class="muted">服务器已启动 Playwright 浏览器。你只需要在下面的远程窗口里手动登录；验证码/MFA 也必须由你人工完成，系统不会绕过风控。</p>' +
         '<div class="warn-box">远程 VNC 临时密码：<strong>' + escapeHtml(result.vncPassword || "无需密码") + '</strong><br/>登录成功后系统会自动检测并加密保存 session；不要在聊天或截图中泄露账号密码。</div>' +
-        '<div class="warn-box">VNC 页面现在不会自动连接。请先输入上方 8 位临时密码，再点击 Connect/连接；不要在 VNC 密码框里输入管理员密码或酒店账号密码。</div>' +
-        '<iframe class="remote-frame" src="' + escapeHtml(result.noVncUrl) + '" title="' + escapeHtml(provider) + ' remote login"></iframe>' +
+        '<div class="warn-box">为避免手机内置浏览器的 iframe/WebSocket 断开，VNC 将在独立窗口打开。打开后输入上方 8 位临时密码，再点击 Connect/连接；不要在 VNC 密码框里输入管理员密码或酒店账号密码。</div>' +
+        '<div class="row" style="margin-top:16px">' +
+          '<button onclick="openRemoteAuthorizationWindow(this.dataset.url)" data-url="' + escapeHtml(result.noVncUrl) + '">打开独立 VNC 登录窗口</button>' +
+          '<a class="button-link secondary" href="' + escapeHtml(result.noVncUrl) + '" target="_blank" rel="noopener noreferrer">按钮无效时点这里</a>' +
+        '</div>' +
         '<p id="remoteAuthMessage" class="muted">' + escapeHtml(remoteStatusMessage(result)) + '</p>' +
         '<div class="row" style="margin-top:18px">' +
           '<button onclick="pollRemoteAuthorization(\\'' + provider + '\\', true)">我已完成登录，立即检测保存</button>' +

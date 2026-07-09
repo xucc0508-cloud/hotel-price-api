@@ -139,6 +139,8 @@ test('admin browser pages and protected JSON APIs are available', async () => {
   assert.match(loginPageHtml, /savePlaywrightSession/);
   assert.match(loginPageHtml, /startRemoteAuthorization/);
   assert.match(loginPageHtml, /pollRemoteAuthorization/);
+  assert.match(loginPageHtml, /openRemoteAuthorizationWindow/);
+  assert.doesNotMatch(loginPageHtml, /<iframe class="remote-frame"/);
   assert.match(loginPageHtml, /远程可视化登录/);
 
   const cachedLoginPageResponse = await fetch(`${baseUrl}/admin/login`, {
@@ -416,6 +418,8 @@ test('remote visual authorization has server safety guards', () => {
   assert.match(remoteAuthSource, /novncReady/);
   assert.match(remoteAuthSource, /autoconnect=0/);
   assert.match(remoteAuthSource, /VNC_PASSWORD_LENGTH/);
+  assert.match(remoteAuthSource, /refreshRemoteTaskHealth/);
+  assert.match(remoteAuthSource, /REMOTE_AUTH_PROCESS_EXITED/);
 });
 test('admin remote visual authorization starts a noVNC-backed Playwright task', async () => {
   process.env.ADMIN_USERNAME = 'remote-auth-admin';
