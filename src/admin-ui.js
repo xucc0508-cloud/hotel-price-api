@@ -1,3 +1,5 @@
+const { providerActionModel } = require('./admin-provider-actions');
+
 const ADMIN_BUILD_VERSION = 'admin-login-stability-v1';
 
 function adminPageHtml() {
@@ -160,6 +162,7 @@ function adminPageHtml() {
     const app = document.getElementById("app");
     const modal = document.getElementById("modal");
     const providers = ["IHG", "Marriott", "Hilton", "Hyatt", "Accor"];
+    const providerActionModel = ${providerActionModel.toString()};
     const retryDelays = [500, 1500];
     const remoteAuthTimers = {};
     let lastRequestStatus = "none";
@@ -344,58 +347,45 @@ function adminPageHtml() {
         '<div class="card metric">同步任务<strong>' + data.summary.syncJobs + '</strong></div>' +
         '</div><div class="card"><h2>定时同步</h2><p>任务：' + escapeHtml(data.cron.name) + '</p><p>计划：' + escapeHtml(data.cron.schedule) + '</p><p>状态：' + escapeHtml(data.cron.status) + '</p></div>');
     }
-    function providerCard(item) {
-      return '<div class="card"><div class="row" style="justify-content:space-between"><h2>' + escapeHtml(item.provider) + '</h2>' + statusBadge(item.connectionStatus) + '</div>' +
-        '<p class="muted">账号：' + escapeHtml(item.usernameMasked || "未录入") + '</p>' +
-        '<p>最近同步：' + escapeHtml(item.lastSyncAt || "暂无") + '</p>' +
-        '<p>酒店：' + item.syncedHotelCount + ' / 价格：' + item.syncedPriceCount + '</p>' +
-        '<p class="error-text">' + escapeHtml(item.recentError || "") + '</p>' +
-        '<div class="row"><button onclick="openProviderLogin(\\'' + item.provider + '\\')">登录账号</button>' +
-        '<button class="secondary" onclick="testProvider(\\'' + item.provider + '\\')">测试连接</button>' +
-        '<button class="secondary" onclick="syncProvider(\\'' + item.provider + '\\')">同步真实价格</button>' +
-        '<a class="badge" href="/admin/sync-logs">查看日志</a></div></div>';
-    }
-    function providerCard(item) {
-      const recentErrorClass = item.connectionStatus === "manual_authorized" ? "success-text" : "error-text";
-      return '<div class="card"><div class="row" style="justify-content:space-between"><h2>' + escapeHtml(item.provider) + '</h2>' + statusBadge(item.connectionStatus) + '</div>' +
-        '<p class="muted">账号：' + escapeHtml(item.usernameMasked || "未录入") + '</p>' +
-        '<p>最近同步：' + escapeHtml(item.lastSyncAt || "暂无") + '</p>' +
-        '<p>酒店：' + item.syncedHotelCount + ' / 价格：' + item.syncedPriceCount + '</p>' +
-        '<p class="' + recentErrorClass + '">' + escapeHtml(item.recentError || "") + '</p>' +
-        '<div class="row"><button onclick="openProviderLogin(\\'' + item.provider + '\\')">登录账号</button>' +
-        '<button class="secondary" onclick="manualAuthorizeProvider(\\'' + item.provider + '\\')">人工授权</button>' +
-        '<button class="secondary" onclick="testProvider(\\'' + item.provider + '\\')">测试连接</button>' +
-        '<button class="secondary" onclick="syncProvider(\\'' + item.provider + '\\')">立即同步</button>' +
-        '<a class="badge" href="/admin/sync-logs">查看日志</a></div></div>';
+    function renderProviderAction(action, provider) {
+      const safeProvider = providers.includes(provider) ? provider : "";
+      if (action.key === "logs") {
+        return '<a class="badge" href="/admin/sync-logs">' + escapeHtml(action.label) + '</a>';
+      }
+      const handlers = {
+        authorize: "startRemoteAuthorization('" + safeProvider + "')",
+        continueAuthorization: "startRemoteAuthorization('" + safeProvider + "')",
+        stopAuthorization: "stopRemoteAuthorization('" + safeProvider + "')",
+        test: "testProvider('" + safeProvider + "')",
+        sync: "syncProvider(this, '" + safeProvider + "')",
+      };
+      const handler = handlers[action.key];
+      if (!handler) return "";
+      const className = action.style === "secondary" ? ' class="secondary"' : "";
+      return '<button' + className + ' data-provider-action="' + escapeHtml(action.key) + '" onclick="' + handler + '">' + escapeHtml(action.label) + '</button>';
     }
 
-    function providerCardV2(item) {
-      const supportsPlaywright = ["IHG", "Marriott"].includes(item.provider);
-      const goodStatus = ["active", "manual_authorized", "session_authorized"].includes(item.connectionStatus);
-      const recentErrorClass = goodStatus ? "success-text" : "error-text";
-      const playwrightActions = supportsPlaywright
-        ? '<button class="secondary" onclick="startRemoteAuthorization(\\'' + item.provider + '\\')">远程可视化登录</button>' +
-          '<button class="secondary" onclick="startPlaywrightAuthorization(\\'' + item.provider + '\\')">' + escapeHtml(item.provider) + ' Playwright授权</button>' +
-          '<button class="secondary" onclick="openPlaywrightSessionModal(\\'' + item.provider + '\\')">保存Session</button>'
+    function providerCard(item) {
+      const actionModel = providerActionModel(item);
+      const synced = ["active", "session_authorized"].includes(item.connectionStatus);
+      const recentError = item.recentError
+        ? '<p class="error-text">' + escapeHtml(item.recentError) + '</p>'
         : '';
-      return '<div class="card"><div class="row" style="justify-content:space-between"><h2>' + escapeHtml(item.provider) + '</h2>' + statusBadge(item.connectionStatus) + '</div>' +
+      return '<div class="card" data-provider="' + escapeHtml(item.provider) + '">' +
+        '<div class="row" style="justify-content:space-between"><h2>' + escapeHtml(item.provider) + '</h2>' + statusBadge(item.connectionStatus) + '</div>' +
         '<p class="muted">账号：' + escapeHtml(item.usernameMasked || "未录入") + '</p>' +
         '<p>最近同步：' + escapeHtml(item.lastSyncAt || "暂无") + '</p>' +
-        '<p>酒店：' + item.syncedHotelCount + ' / 价格：' + item.syncedPriceCount + '</p>' +
+        '<p>酒店：' + Number(item.syncedHotelCount || 0) + ' / 价格：' + Number(item.syncedPriceCount || 0) + '</p>' +
         '<p class="muted">同步窗口：' + escapeHtml(item.syncWindowDays || 90) + ' 天</p>' +
-        '<p class="' + recentErrorClass + '">' + escapeHtml(item.recentError || "") + '</p>' +
-        '<div class="row"><button onclick="openProviderLogin(\\'' + item.provider + '\\')">登录账号</button>' +
-        '<button class="secondary" onclick="manualAuthorizeProvider(\\'' + item.provider + '\\')">人工授权</button>' +
-        playwrightActions +
-        '<button class="secondary" onclick="testProvider(\\'' + item.provider + '\\')">测试连接</button>' +
-        '<button class="secondary" onclick="syncProvider(\\'' + item.provider + '\\')">同步90天价格</button>' +
-        '<a class="badge" href="/admin/sync-logs">查看日志</a></div></div>';
+        '<p class="' + (synced ? 'success-text' : 'muted') + '">' + escapeHtml(actionModel.notice) + '</p>' +
+        recentError +
+        '<div class="row">' + actionModel.actions.map(action => renderProviderAction(action, item.provider)).join("") + '</div></div>';
     }
 
     async function renderProviders() {
       const data = await adminFetch("/admin/providers");
       const normalized = providers.map(name => data.find(item => item.provider === name) || { provider: name, connectionStatus: "expired", syncedHotelCount: 0, syncedPriceCount: 0 });
-      layout("Providers", '<div class="provider-grid">' + normalized.map(providerCardV2).join("") + '</div>');
+      layout("Providers", '<div class="provider-grid">' + normalized.map(providerCard).join("") + '</div>');
     }
     async function renderJobs() {
       const data = await adminFetch("/admin/sync/jobs");
@@ -409,14 +399,6 @@ function adminPageHtml() {
         data.map(item => '<tr><td>' + escapeHtml(item.createdAt) + '</td><td>' + escapeHtml(item.provider || "-") + '</td><td>' + statusBadge(item.level) + '</td><td>' + escapeHtml(item.message || "") + '</td></tr>').join("") +
         '</tbody></table></div>');
     }
-    function openProviderLogin(provider) {
-      modal.className = "modal show";
-      modal.innerHTML = '<div class="card"><h2>' + escapeHtml(provider) + ' 账号授权</h2><p class="muted">请由管理员手动输入。若遇到验证码/MFA，必须人工完成验证，不会自动绕过。</p>' +
-        '<label>账号</label><input id="providerUsername" autocomplete="off" />' +
-        '<label>密码</label><input id="providerPassword" type="password" autocomplete="off" />' +
-        '<div class="row" style="margin-top:18px"><button onclick="saveProviderLogin(\\'' + provider + '\\')">保存加密凭据</button><button class="secondary" onclick="closeModal()">取消</button></div>' +
-        '<p id="providerMessage" class="muted"></p></div>';
-    }
     function closeModal() {
       Object.keys(remoteAuthTimers).forEach((key) => {
         clearTimeout(remoteAuthTimers[key]);
@@ -425,37 +407,11 @@ function adminPageHtml() {
       modal.className = "modal";
       modal.innerHTML = "";
     }
-    async function saveProviderLogin(provider) {
-      const username = document.getElementById("providerUsername").value;
-      const password = document.getElementById("providerPassword").value;
-      const messageEl = document.getElementById("providerMessage");
-      try {
-        const result = await adminFetch("/admin/providers/" + provider + "/login", { method: "POST", body: JSON.stringify({ username, password }) });
-        messageEl.textContent = "已保存：" + result.usernameMasked + "；状态：" + result.status;
-        setTimeout(() => { closeModal(); renderProviders(); }, 700);
-      } catch (error) {
-        messageEl.textContent = String(error.code ? error.code + ": " + error.message : error.message || error);
-      }
-    }
     async function testProvider(provider) {
       try {
         const result = await adminFetch("/admin/providers/" + provider + "/test", { method: "POST", body: "{}" });
         alert(result.message || "测试完成");
       } catch (error) { alert(String(error.code ? error.code + ": " + error.message : error.message || error)); }
-    }
-    async function manualAuthorizeProvider(provider) {
-      const ok = confirm(provider + " 将被标记为人工授权。\\n\\n这只表示管理员已确认账号由本人录入；不会伪造官方 API/OAuth，也不会绕过验证码/MFA。\\n\\n继续吗？");
-      if (!ok) return;
-      try {
-        const result = await adminFetch("/admin/providers/" + provider + "/manual-authorize", {
-          method: "POST",
-          body: JSON.stringify({ note: "Confirmed from admin console." }),
-        });
-        alert(result.message || "已人工授权");
-        await renderProviders();
-      } catch (error) {
-        alert(String(error.code ? error.code + ": " + error.message : error.message || error));
-      }
     }
 
     function remoteStatusMessage(result) {
@@ -472,7 +428,7 @@ function adminPageHtml() {
       return '<div id="remoteSavedActions" class="warn-box" style="display:none">' +
         '<strong>Session 已保存，无需重新登录。</strong><br/>下一步请直接同步90天价格，系统会用已保存 session 查询真实酒店与价格。' +
         '<div class="row" style="margin-top:12px">' +
-          '<button onclick="syncProvider(\\'' + provider + '\\')">同步90天价格</button>' +
+          '<button onclick="syncProvider(this, \\'' + provider + '\\')">同步90天价格</button>' +
           '<button class="secondary" onclick="closeModal(); renderProviders();">回到 Providers</button>' +
         '</div></div>';
     }
@@ -562,57 +518,49 @@ function adminPageHtml() {
       }
     }
 
-    async function startPlaywrightAuthorization(provider) {
+    function showSyncResult(provider, result) {
+      const succeeded = result?.status === "success";
+      const hotelCount = Number(result?.totalHotels || 0);
+      const priceCount = Number(result?.totalPrices || 0);
+      const errorMessage = String(result?.errorMessage || "");
+      modal.className = "modal show";
+      modal.innerHTML = '<div class="card"><div class="row" style="justify-content:space-between"><h2>' + escapeHtml(provider) + ' 同步结果</h2>' + statusBadge(succeeded ? "success" : "failed") + '</div>' +
+        '<p>真实酒店：<strong>' + hotelCount + '</strong></p>' +
+        '<p>真实价格：<strong>' + priceCount + '</strong></p>' +
+        (result?.id ? '<p class="muted">任务：' + escapeHtml(result.id) + '</p>' : '') +
+        (errorMessage ? '<div class="warn-box">' + escapeHtml(errorMessage) + '</div>' : '') +
+        '<div class="row" style="margin-top:18px">' +
+          '<a class="button-link" href="/admin/sync-jobs">查看同步任务</a>' +
+          '<a class="button-link secondary" href="/admin/sync-logs">查看日志</a>' +
+          '<button class="secondary" onclick="closeModal()">关闭</button>' +
+        '</div></div>';
+    }
+
+    async function syncProvider(button, provider) {
+      const originalText = button ? button.textContent : "";
+      if (button) {
+        button.disabled = true;
+        button.textContent = "正在同步…";
+      }
       try {
-        const result = await adminFetch("/admin/providers/" + provider + "/playwright/start", {
+        const result = await adminFetch("/admin/providers/" + provider + "/sync", {
           method: "POST",
           body: JSON.stringify({ days: 90 }),
+          timeoutMs: 120000,
         });
-        modal.className = "modal show";
-        modal.innerHTML = '<div class="card"><h2>' + escapeHtml(result.provider || provider) + ' Playwright 人工授权</h2>' +
-          '<p>同步窗口：' + escapeHtml(result.days) + ' 天</p>' +
-          '<p>请打开 ' + escapeHtml(result.provider || provider) + ' 登录页，手动完成账号、验证码/MFA。完成后导出 Playwright storageState JSON，再点“保存Session”。</p>' +
-          '<p><a class="badge" target="_blank" rel="noopener" href="' + escapeHtml(result.loginUrl) + '">打开 ' + escapeHtml(result.provider || provider) + ' 登录页</a></p>' +
-          '<div class="warn-box">不会绕过验证码、MFA 或风控；没有真实 session 时不会写入真实价格。</div>' +
-          '<div class="row" style="margin-top:18px"><button onclick="openPlaywrightSessionModal(\\'' + provider + '\\')">保存Session</button><button class="secondary" onclick="closeModal()">关闭</button></div></div>';
+        showSyncResult(provider, result);
         await renderProviders();
       } catch (error) {
-        alert(String(error.code ? error.code + ": " + error.message : error.message || error));
-      }
-    }
-
-    function openPlaywrightSessionModal(provider) {
-      modal.className = "modal show";
-      modal.innerHTML = '<div class="card"><h2>' + escapeHtml(provider) + ' 保存 Playwright Session</h2>' +
-        '<p class="muted">粘贴 Playwright storageState JSON。Cookie 会加密保存，接口不会返回 Cookie 内容。</p>' +
-        '<label>storageState JSON</label><textarea id="playwrightStorageState" autocomplete="off" placeholder="{ &quot;cookies&quot;: [], &quot;origins&quot;: [] }"></textarea>' +
-        '<label>同步天数</label><input id="playwrightDays" value="90" inputmode="numeric" />' +
-        '<div class="row" style="margin-top:18px"><button onclick="savePlaywrightSession(\\'' + provider + '\\')">加密保存Session</button><button class="secondary" onclick="closeModal()">取消</button></div>' +
-        '<p id="playwrightSessionMessage" class="muted"></p></div>';
-    }
-
-    async function savePlaywrightSession(provider) {
-      const messageEl = document.getElementById("playwrightSessionMessage");
-      try {
-        const raw = document.getElementById("playwrightStorageState").value;
-        const days = Number(document.getElementById("playwrightDays").value || 90);
-        const storageState = JSON.parse(raw);
-        const result = await adminFetch("/admin/providers/" + provider + "/playwright/session", {
-          method: "POST",
-          body: JSON.stringify({ storageState, days }),
+        showSyncResult(provider, {
+          status: "failed",
+          errorMessage: String(error.code ? error.code + ": " + error.message : error.message || error),
         });
-        messageEl.textContent = "已保存Session；Cookie数量：" + result.cookieCount + "；同步窗口：" + result.days + "天";
-        setTimeout(() => { closeModal(); renderProviders(); }, 900);
-      } catch (error) {
-        messageEl.textContent = String(error.code ? error.code + ": " + error.message : error.message || error);
+      } finally {
+        if (button) {
+          button.disabled = false;
+          button.textContent = originalText;
+        }
       }
-    }
-
-    async function syncProvider(provider) {
-      try {
-        const result = await adminFetch("/admin/providers/" + provider + "/sync", { method: "POST", body: JSON.stringify({ days: 90 }) });
-        alert("已创建任务：" + result.id + "\\n" + (result.errorMessage || ""));
-      } catch (error) { alert(String(error.code ? error.code + ": " + error.message : error.message || error)); }
     }
     async function boot() {
       try {

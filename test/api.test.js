@@ -135,8 +135,10 @@ test('admin browser pages and protected JSON APIs are available', async () => {
   assert.match(loginPageHtml, /admin-login-stability-v1/);
   assert.match(loginPageHtml, /same-origin/);
   assert.match(loginPageHtml, /adminFetch/);
-  assert.match(loginPageHtml, /startPlaywrightAuthorization/);
-  assert.match(loginPageHtml, /savePlaywrightSession/);
+  assert.match(loginPageHtml, /providerActionModel/);
+  assert.match(loginPageHtml, /renderProviderAction/);
+  assert.match(loginPageHtml, /showSyncResult/);
+  assert.match(loginPageHtml, /button\.disabled = true/);
   assert.match(loginPageHtml, /startRemoteAuthorization/);
   assert.match(loginPageHtml, /pollRemoteAuthorization/);
   assert.match(loginPageHtml, /openRemoteAuthorizationWindow/);
@@ -147,6 +149,14 @@ test('admin browser pages and protected JSON APIs are available', async () => {
   assert.doesNotMatch(loginPageHtml, /setTimeout\(\(\) => \{ closeModal\(\); \}, 1200\)/);
   assert.doesNotMatch(loginPageHtml, /<iframe class="remote-frame"/);
   assert.match(loginPageHtml, /远程可视化登录/);
+  assert.doesNotMatch(loginPageHtml, /manualAuthorizeProvider/);
+  assert.doesNotMatch(loginPageHtml, /startPlaywrightAuthorization/);
+  assert.doesNotMatch(loginPageHtml, /openPlaywrightSessionModal/);
+  assert.doesNotMatch(loginPageHtml, />人工授权</);
+  assert.doesNotMatch(loginPageHtml, />保存Session</);
+  const browserScript = loginPageHtml.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+  assert.ok(browserScript);
+  assert.doesNotThrow(() => new Function(browserScript));
 
   const cachedLoginPageResponse = await fetch(`${baseUrl}/admin/login`, {
     headers: {
